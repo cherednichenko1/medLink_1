@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MedLink</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #FFFAF0; /* Світло-пісочний фон */
+        }
+        header {
+            background-color: #87CEEB; /* Голубий для шапки */
+            color: white;
+            padding: 10px 20px;
+            text-align: center;
+            border: 2px solid #4682B4; /* Синьо-сірий контур */
+        }
+        nav {
+            background-color: #87CEEB; /* Голубий для навігації */
+            padding: 10px;
+            border: 2px solid #4682B4; /* Синьо-сірий контур */
+        }
+        nav a {
+            color: white;
+            text-decoration: none;
+            margin: 0 15px;
+        }
+        nav a:hover {
+            text-decoration: underline;
+        }
+        main {
+            padding: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .button {
+            background-color: #4682B4; /* Синьо-сірий для кнопок */
+            color: white;
+            padding: 10px 20px;
+            border: 2px solid #4682B4; /* Синьо-сірий контур */
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .button:hover {
+            background-color: #4169E1; /* Темніший синій при наведенні */
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>MedLink</h1>
+    </header>
+    <nav>
+        <a href="{{ url_for('main') }}">Головна</a>
+        <a href="{{ url_for('helsiPage') }}">MedLink</a> <!-- Змінено з Helsi на MedLink -->
+        <a href="{{ url_for('searchPage') }}">Пошук лікарів</a>
+
+        {% if session.user_role %}
+            {% if session.user_role == 'user' %}
+                <a href="{{ url_for('user_cabinet') }}">Особистий кабінет</a>
+            {% elif session.user_role == 'doctor' %}
+                <a href="{{ url_for('doctor_cabinet') }}">Кабінет лікаря</a>
+            {% endif %}
+            <a href="{{ url_for('logout') }}">Вийти</a>
+        {% else %}
+            <a href="{{ url_for('loginPage') }}">Увійти</a>
+            <a href="{{ url_for('registerPage') }}">Реєстрація</a>
+        {% endif %}
+    </nav>
+    <main>
+        {% block body %}{% endblock %}
+    </main>
+</body>
+</html>

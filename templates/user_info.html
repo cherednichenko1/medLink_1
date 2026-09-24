@@ -1,0 +1,14 @@
+{% extends 'base.html' %}
+
+{% block body %}
+<div class="userCabinetPage">
+  <h2>Інформація про користувача</h2>
+  <div class="doctor-info">
+    <ul>
+      <li><strong>Ім'я:</strong> {{ user.name }}</li>
+      <li><strong>Email:</strong> {{ user.email }}</li>
+      <li><strong>Телефон:</strong> {{ user.phone }}</li>
+    </ul>
+  </div>
+</div>
+{% endblock %}

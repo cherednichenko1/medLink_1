@@ -1,0 +1,46 @@
+{% extends 'base.html' %}
+
+{% block body %}
+  <main class="page">
+    <h2>Увійти</h2>
+    <form method="post" action="/getLogin">
+    <div class="form-group">
+      <label>Роль:</label><br>
+      <select name="role" id="roleSelect" onchange="toggleLoginLabel()" required>
+        <option value="doctor">Лікар</option>
+        <option value="user">Користувач</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label id="loginLabel">Email або РНОКПП:</label><br>
+      <input type="text" name="enterLogin" required>
+    </div>
+
+    <div class="form-group">
+      <label>Пароль:</label><br>
+      <input type="password" name="enterPassword" required>
+    </div>
+
+    <button type="submit" class="button">Увійти</button>
+  </form>
+
+  <script>
+    function toggleLoginLabel() {
+      const role = document.getElementById('roleSelect').value;
+      const label = document.getElementById('loginLabel');
+      if (role === 'doctor') {
+        label.textContent = 'Email або РНОКПП:';
+      } else {
+        label.textContent = 'Email:';
+      }
+    }
+  </script>
+
+  </main>
+
+  <footer class="footer">
+    <p>© 2025 MedLink. Всі права захищені.</p>
+  </footer>
+{% endblock %}
+

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Реєстрація</title>
+</head>
+<body>
+  <form class="registration-form" action="/submitRegistration" method="POST">
+    <h2>Реєстрація</h2>
+    <div class="form-group">
+      <label for="username">Імя</label><br>
+      <input type="text" id="username" name="username" placeholder="Введіть імя" required>
+    </div>
+    <div class="form-group">
+      <label for="email">Email</label><br>
+      <input type="email" id="email" name="email" placeholder="Введіть email" required>
+    </div>
+    <div class="form-group">
+      <label for="password">Password</label><br>
+      <input type="password" id="password" name="password" placeholder="Введіть пароль" required>
+    </div>
+    <div class="form-group">
+      <label for="confirm-password">Підтвердіть пароль</label><br>
+      <input type="password" id="confirm-password" name="confirm_password" placeholder="П" required>
+    </div>
+    <button type="submit" class="submit-button">Register</button>
+  </form>
+</body>
+</html>

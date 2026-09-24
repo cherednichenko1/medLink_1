@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.git
+.gitignore
+db.sqlite3
+*.sqlite3
+.DS_Store
+k8s/
+docker-compose.yml
+README.md
+DEPLOY.md

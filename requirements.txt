@@ -1,0 +1,6 @@
+Flask==3.0.3
+psycopg2-binary==2.9.9
+qrcode==7.4.2
+reportlab==4.2.5
+gunicorn==22.0.0
+Pillow==10.4.0

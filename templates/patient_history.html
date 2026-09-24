@@ -1,0 +1,41 @@
+{% extends 'base.html' %}
+
+{% block body %}
+<div class="userDoctorPage">
+  <h2>Історія хвороб пацієнта: {{ patient.name }}</h2>
+  <div class="doctor-info">
+    <h3>Дані пацієнта:</h3>
+    <ul>
+      <li><strong>Ім'я:</strong> {{ patient.name }}</li>
+      <li><strong>Email:</strong> {{ patient.email }}</li>
+      <li><strong>Телефон:</strong> {{ patient.phone }}</li>
+    </ul>
+  </div>
+
+  <div class="patient-history">
+    <h3>Історія хвороб</h3>
+    {% if history %}
+      <table class="doctorDatabaseTable">
+        <thead>
+          <tr>
+            <th>Дата</th>
+            <th>Рекомендації</th>
+            <th>Ліки</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for entry in history %}
+            <tr>
+              <td>{{ entry[2] }}</td>
+              <td>{{ entry[0] or 'Не вказано' }}</td>
+              <td>{{ entry[1] or 'Не вказано' }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p>Історія хвороб для цього пацієнта відсутня.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

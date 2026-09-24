@@ -1,0 +1,17 @@
+{% extends 'base.html' %}
+
+{% block body %}
+<div class="userDoctorPage">
+  <h2>Інформація про лікаря</h2>
+  <div class="doctor-info">
+    <ul>
+      <li><strong>ПІБ:</strong> {{ doctor.full_name }}</li>
+      <li><strong>Телефон:</strong> {{ doctor.phone }}</li>
+      <li><strong>Стаж:</strong> {{ doctor.experience }} років</li>
+      <li><strong>Email:</strong> {{ doctor.email }}</li>
+      <li><strong>Спеціалізація:</strong> {{ doctor.specialization }}</li>
+      <li><strong>Заклад:</strong> {{ doctor.hospital }}</li>
+    </ul>
+  </div>
+</div>
+{% endblock %}tml>
