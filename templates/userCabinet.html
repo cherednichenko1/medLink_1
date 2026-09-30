@@ -13,12 +13,23 @@
           <p><strong>Телефон:</strong> {{ user.phone }}</p>
         </td>
         <td style="padding: 10px; vertical-align: top; width: 30%; text-align: center;">
-          <img src="{{ url_for('static', filename='user_placeholder.png') }}" alt="Фото користувача" style="max-width: 150px; height: auto;">
+          <span aria-label="Пацієнт" role="img">👤</span>
         </td>
       </tr>
     </table>
   </div>
 
   <a href="{{ url_for('generate_qr_user') }}" class="button">Отримати QR-код</a>
+<p><a href="{{ url_for('patient_history', patient_id=session.user_id) }}">Моя медична історія</a> · <a href="{{ url_for('download_patient_history_pdf', patient_id=session.user_id) }}">Завантажити PDF</a></p>
+  <p>QR-код містить посилання. Для доступу до персональних даних потрібно увійти.</p>
+  <h2>Мої записи на прийом</h2>
+  <div class="table-scroll"><table class="data-table"><thead><tr><th>Лікар</th><th>Дата</th><th>Час</th><th>Статус</th><th>Дія</th></tr></thead><tbody>
+  {% for id, name, date, time, status in appointments %}
+  <tr><td>{{ name }}</td><td>{{ date }}</td><td>{{ time.strftime('%H:%M') }}</td><td>{{ 'Скасовано' if status == 'cancelled' else 'Записано' }}</td><td>
+  {% if status == 'scheduled' and (date > current_time.date() or (date == current_time.date() and time > current_time.time())) %}
+  <form method="post" action="{{ url_for('cancel_appointment', appointment_id=id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="button">Скасувати</button></form>
+  {% endif %}</td></tr>
+  {% else %}<tr><td colspan="5">Записів поки немає. <a href="{{ url_for('searchPage') }}">Знайти лікаря</a></td></tr>{% endfor %}
+  </tbody></table></div>
 </main>
 {% endblock %}

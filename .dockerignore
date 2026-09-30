@@ -9,3 +9,11 @@ k8s/
 docker-compose.yml
 README.md
 DEPLOY.md
+
+# Keep local secrets and backups out of build context
+.env
+.env.*
+*.dump
+tests/
+.github/
+PROJECT_NOTES.md

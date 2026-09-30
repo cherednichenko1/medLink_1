@@ -1,165 +1,135 @@
-# Розгортання MedLink у Kubernetes (minikube) на macOS
+# Запуск і оновлення MedLink
 
-Стек: Flask (gunicorn) + PostgreSQL + nginx (reverse proxy), усе в кластері minikube.
+Стек: Flask/Gunicorn, PostgreSQL 16, nginx. Код запуску БД винесено в `db.py`, захист і валідацію — у `security.py`.
 
-## 0. Що встановити
+## Перед першим оновленням на нову версію
+
+1. Збережіть резервну копію наявної БД. Не видаляйте PostgreSQL volume/PVC або namespace.
+2. У Secret `medlink-secrets` значення `FLASK_SECRET_KEY` має бути випадковим секретом довжиною щонайменше 32 символи. Нова версія відхиляє короткі та відомі шаблонні ключі. Для генерації власного значення:
+
+   ```bash
+   python3 -c 'import secrets; print(secrets.token_urlsafe(48))'
+   ```
+
+   Запишіть його у власний локальний `k8s/01-secrets.yaml` (файл ігнорується Git). Не змінюйте `POSTGRES_PASSWORD`, `POSTGRES_USER` чи `POSTGRES_DB` для існуючого volume: зміна env PostgreSQL не змінює пароль наявного користувача БД.
+3. Щоб відкрити реєстрацію лікарів, додайте до `stringData` того ж Secret окремий випадковий `DOCTOR_REGISTRATION_CODE`. Без цього ключа реєстрація нових лікарів закрита; наявні лікарі можуть входити. Передавайте код лише перевіреним лікарям.
+4. Нова версія мігрує наявні відкриті паролі до PBKDF2-SHA256 (1 000 000 ітерацій), нормалізує email, переводить дати/час прийомів у типи PostgreSQL DATE/TIME та створює унікальний індекс активних слотів. Усі дії — одна транзакція з блокуванням між Pod-ами. Повторний запуск не перехешовує паролі.
+5. Якщо є некоректні дати, дублікати активних слотів або email, які відрізняються лише регістром/пробілами, міграція зупиниться й відкотиться. Дублі не видаляються автоматично: перегляньте логи, виправте конфліктні записи після резервного копіювання, повторіть запуск.
+6. На час **першої** міграції зупиніть старі Flask Pod-и, щоб старий код не записував відкриті паролі під час оновлення. Попередній образ несумісний із новим форматом паролів; повернення до нього потребує відновлення резервної копії БД.
+
+Резервна копія для вже запущеного стандартного deployment:
 
 ```bash
-brew install --cask docker          # Docker Desktop (потрібен для збірки образів)
-brew install minikube kubectl
+cd /Users/evgencerednicenko/Desktop/medLink_1
+kubectl exec -n medlink deployment/postgres -- pg_dump -U medlink -d medlink --format=custom > medlink-before-update.dump
 ```
 
-Відкрий Docker Desktop і дочекайся, поки він повністю запуститься (іконка кита в меню-барі стане активною).
+Переконайтеся, що команда успішна і файл не порожній. Для інших DB_USER/DB_NAME підставте власні значення.
 
-Перевір встановлення:
-```bash
-docker --version
-minikube version
-kubectl version --client
-```
+## Kubernetes / minikube
 
-## 1. Запусти локальний кластер
+Після запуску Docker Desktop:
 
 ```bash
+cd /Users/evgencerednicenko/Desktop/medLink_1
 minikube start --cpus=4 --memory=6g --driver=docker
+minikube addons enable ingress
+eval "$(minikube docker-env)"
+docker build --pull -t medlink-app:latest .
 ```
 
-Якщо мало ресурсів на ноуті — зменш `--cpus`/`--memory` (мінімум 2 CPU / 4g для трьох сервісів).
-
-Перевір, що кластер живий:
-```bash
-kubectl get nodes
-```
-
-## 2. Збери Docker-образ застосунку ВСЕРЕДИНІ minikube
-
-Це ключовий момент: minikube має свій власний Docker-демон, окремий від того, що на ноуті. Якщо зібрати образ звичайним `docker build`, кластер його не побачить. Тому:
+Для існуючої інсталяції перед першою міграцією:
 
 ```bash
-cd medlink          # тека з Dockerfile, app.py, k8s/ і т.д.
-eval $(minikube docker-env)
-docker build -t medlink-app:latest .
+kubectl scale deployment/flask-app -n medlink --replicas=0
+kubectl wait --for=delete pod -n medlink -l app=flask-app --timeout=120s
 ```
 
-Перевір, що образ з'явився саме в demon-і minikube:
-```bash
-docker images | grep medlink-app
-```
-
-⚠️ Команда `eval $(minikube docker-env)` діє тільки в поточному терміналі. Якщо відкриєш новий термінал — треба повторити.
-
-## 3. Застосуй k8s-маніфести
-
-Файли пронумеровані — накатуй по порядку (або просто `kubectl apply -f k8s/`, k8s сам розбереться з namespace завдяки номерам):
+Namespace створюйте перед іншими ресурсами. `01-secrets.example.yaml` містить лише приклад, не застосовуйте його замість власного Secret. Ingress Argo CD застосовуйте окремо лише за наявності Argo CD:
 
 ```bash
-kubectl apply -f k8s/
+kubectl apply -f k8s/00-namespace.yaml
+kubectl apply -f k8s/01-secrets.yaml
+kubectl apply -f k8s/02-postgres-pvc.yaml -f k8s/03-postgres-deployment.yaml -f k8s/04-postgres-service.yaml
+kubectl apply -f k8s/05-flask-configmap.yaml -f k8s/06-flask-deployment.yaml -f k8s/07-flask-service.yaml
+kubectl apply -f k8s/08-nginx-configmap.yaml -f k8s/09-nginx-deployment.yaml -f k8s/10-nginx-service.yaml
+kubectl apply -f k8s/11-medlink-ingress.yaml
+kubectl rollout status deployment/flask-app -n medlink --timeout=300s
+kubectl get pods -n medlink
 ```
 
-Перевір, що все піднялось:
-```bash
-kubectl get all -n medlink
-kubectl get pods -n medlink -w    # почекай, поки всі стануть Running (Ctrl+C щоб вийти)
-```
+У Flask deployment знову встановлено 2 репліки. На наступних оновленнях образу з тим самим тегом потрібен `kubectl rollout restart deployment/flask-app -n medlink`, бо `imagePullPolicy: Never` використовує локальний образ.
 
-Якщо под flask-app в CrashLoopBackOff — подивись логи:
-```bash
-kubectl logs -n medlink deployment/flask-app
-kubectl logs -n medlink deployment/postgres
-```
-
-Найчастіша причина — Postgres ще не встиг піднятись до першого запиту Flask. У `app.py` вже є retry-логіка (`wait_for_db`), тож под має сам перезапуститись і зʼєднатись за кілька спроб.
-
-## 4. Відкрий застосунок у браузері
+Відкриття:
 
 ```bash
 minikube service nginx-service -n medlink
 ```
 
-Ця команда сама відкриє браузер з правильним IP:port (в minikube NodePort треба тунелювати через сам minikube, звичайний `localhost:30080` напряму може не спрацювати на macOS з driver=docker).
-
-Альтернатива — тримати окремий термінал відкритим:
-```bash
-minikube tunnel
-```
-і тоді звертатись за адресою, яку покаже `kubectl get svc -n medlink`.
-
-## 5. Корисні команди для дебагу
+Або налаштуйте `medlink.local` для вашого способу доступу до ingress. Для простого доступу без ingress:
 
 ```bash
-# Зайти всередину пода Flask
-kubectl exec -it -n medlink deployment/flask-app -- /bin/bash
-
-# Зайти в Postgres і подивитись таблиці
-kubectl exec -it -n medlink deployment/postgres -- psql -U medlink -d medlink -c '\dt'
-
-# Перезапустити деплоймент після зміни коду (після нової збірки образу)
-kubectl rollout restart deployment/flask-app -n medlink
-
-# Подивитись, чому под не стартує
-kubectl describe pod -n medlink <ім'я_пода>
-
-# Прибрати все і почати заново
-kubectl delete namespace medlink
+kubectl port-forward -n medlink service/nginx-service 8080:80
 ```
 
-## 6. Якщо міняєш код app.py
+Відкрийте http://localhost:8080. Якщо використовуєте port-forward/іншу адресу, змініть `PUBLIC_BASE_URL` у `k8s/06-flask-deployment.yaml` на цю адресу **до застосування**, щоб QR-коди вели на доступний сайт. У маніфесті за замовчуванням — `http://medlink.local`.
 
-Після будь-якої зміни в `app.py`, `templates/` чи `static/` треба перезібрати образ (все ще в тому ж терміналі з `eval $(minikube docker-env)`):
+`/healthz` перевіряє БД і версію міграції (readiness). `/livez` перевіряє Flask (liveness/startup). Startup probe дає до 5 хвилин на ініціалізацію. Контейнер працює без root і без додаткових capabilities.
+
+Логи:
 
 ```bash
-docker build -t medlink-app:latest .
-kubectl rollout restart deployment/flask-app -n medlink
+kubectl logs -n medlink deployment/flask-app --tail=100
+kubectl describe pods -n medlink -l app=flask-app
 ```
 
-## 7. Швидка перевірка без k8s (опційно, але рекомендовано перед деплоєм)
+Для виключно HTTPS-сайту встановіть `SESSION_COOKIE_SECURE=true`; для локального HTTP залиште `false`. `TRUST_PROXY=true` допустимий лише коли клієнти звертаються через ваш nginx, а не напряму до Gunicorn. Не відкривайте Flask service зовні.
 
-Перш ніж возитись із kubectl, варто переконатись, що застосунок і БД взагалі дружать одне з одним:
+## Docker Compose
 
 ```bash
-docker compose up --build
+cp .env.example .env
 ```
 
-Відкрий http://localhost:8080 — це той самий стек (Flask + Postgres + nginx), тільки через docker-compose. Якщо тут щось не так — легше дебажити, ніж одразу в кластері.
+Заповніть `.env`: випадковий `FLASK_SECRET_KEY`, `DB_PASSWORD`, за потреби `DOCTOR_REGISTRATION_CODE`. Для наявного `pgdata` використовуйте фактичний пароль БД (попередній Compose задавав `medlink_local_pass`). Не комітьте `.env`.
 
-Зупинити:
 ```bash
-docker compose down        # дані зостануться (volume pgdata)
-docker compose down -v     # видалити і дані теж
+docker compose up --build -d
+docker compose ps
+curl --fail http://localhost:8080/healthz
 ```
 
-## Структура проєкту
+При першій міграції існуючого Compose-стеку спочатку зупиніть старий застосунок (`docker compose stop app nginx`) і зробіть резервну копію PostgreSQL. Зупинка зі збереженням даних: `docker compose down`.
 
-```
-medlink/
-├── app.py                    # Flask-застосунок (PostgreSQL замість SQLite)
-├── requirements.txt
-├── Dockerfile
-├── .dockerignore
-├── docker-compose.yml        # для локальної перевірки без k8s
-├── nginx/
-│   └── nginx.conf            # конфіг для docker-compose варіанту
-├── templates/                 # HTML-шаблони (скопійовані з проєкту)
-├── static/                    # CSS/JS/зображення
-└── k8s/
-    ├── 00-namespace.yaml
-    ├── 01-secrets.yaml        # ⚠️ зміни паролі перед реальним використанням
-    ├── 02-postgres-pvc.yaml
-    ├── 03-postgres-deployment.yaml
-    ├── 04-postgres-service.yaml
-    ├── 05-flask-configmap.yaml
-    ├── 06-flask-deployment.yaml
-    ├── 07-flask-service.yaml
-    ├── 08-nginx-configmap.yaml
-    ├── 09-nginx-deployment.yaml
-    └── 10-nginx-service.yaml
+## Тести
+
+Потрібен Python 3.12. Для звичайного запуску тестів без БД:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python -m unittest discover -s tests -v
 ```
 
-## Відомі нюанси проєкту (не пов'язані з деплоєм, але варто знати)
+Тести самі задають окремий тестовий Flask secret. Інтеграційні тести без `TEST_DATABASE_URL` пропускаються. Для них створіть **окрему тестову БД**, задайте її URL у `TEST_DATABASE_URL` і повторіть команду. Тести створюють унікальні схеми та видаляють лише їх. Для PDF на macOS можна задати:
 
-- `registerForm.html` у вихідному проєкті не відповідає полям, які читає `/registerPage`
-  (форма має `username`/`confirm-password`, а бекенд очікує `role`/`name`/`email`/`phone`/`rnokpp`/...).
-  Реєстрація в поточному вигляді працювати не буде — це вже було так у вихідному коді,
-  я це не займав, оскільки завдання було саме про деплой.
-- Паролі користувачів/лікарів зберігаються у відкритому вигляді в БД — варто буде додати
-  хешування (наприклад, `werkzeug.security.generate_password_hash`) окремим кроком.
+```bash
+export PDF_FONT_PATH='/Library/Fonts/Arial Unicode.ttf'
+```
+
+GitHub Actions запускає тести з окремим PostgreSQL 16, аудит залежностей і збірку Docker після push/PR. Файл workflow створено локально; до push автоматизація на GitHub не запускається.
+
+## Ручна перевірка після білду
+
+- Відкрити головну, пошук і реєстрацію; перевірити повідомлення про помилки форми.
+- Зареєструвати пацієнта, увійти. Пароль із пробілами має працювати без обрізання.
+- Зареєструвати лікаря з кодом запрошення; без коду ця дія недоступна.
+- Як пацієнт записатися на майбутній будній день, 09:00–16:30, на слот кратний 30 хвилинам.
+- Спробувати зайнятий слот іншим пацієнтом: має з'явитися повідомлення, другий запис не створюється.
+- Скасувати власний майбутній прийом і повторно забронювати звільнений слот.
+- Як лікар відкрити свого пацієнта та додати рекомендації; як пацієнт переглянути історію і завантажити PDF з українським текстом.
+- Інший пацієнт/лікар і гість не повинні бачити чужі персональні дані, історію або PDF. QR-посилання також вимагає авторизації.
+- Перевірити повідомлення про створення облікового запису, вхід, запис, скасування, збереження історії та вихід.
+
+Повідомлення реалізовані всередині сайту. Email/SMS і push-повідомлення потребують окремого сервісу та налаштувань і в цій версії не відправляються.

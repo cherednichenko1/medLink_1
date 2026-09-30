@@ -16,16 +16,20 @@
           <p><strong>Лікарня:</strong> {{ doctor.hospital }}</p>
         </td>
         <td style="padding: 10px; vertical-align: top; width: 30%; text-align: center;">
-          <img src="{{ url_for('static', filename='doctor_placeholder.png') }}" alt="Фото лікаря" style="max-width: 150px; height: auto;">
+          <span aria-label="Лікар" role="img">👨‍⚕️</span>
         </td>
       </tr>
     </table>
   </div>
 
-  <h2>Пацієнти</h2>
+  <h2>Майбутні прийоми</h2>
+  <div class="table-scroll"><table class="data-table"><thead><tr><th>Дата</th><th>Час</th><th>Пацієнт</th></tr></thead><tbody>
+  {% for date, time, name in appointments %}<tr><td>{{ date }}</td><td>{{ time.strftime('%H:%M') }}</td><td>{{ name or 'Попередній гостьовий запис' }}</td></tr>{% else %}<tr><td colspan="3">Записів поки немає.</td></tr>{% endfor %}
+  </tbody></table></div>
+  <h2>Пацієнти</h2><p>Тут відображаються пацієнти, які записалися до вас або вже мають вашу медичну історію.</p>
   <form method="GET" action="{{ url_for('doctor_cabinet') }}">
     <label>Оберіть пацієнта:
-      <select name="patient_id" onchange="this.form.submit()">
+      <select name="patient_id" data-submit-on-change>
         <option value="">-- Виберіть --</option>
         {% for patient in patients %}
           <option value="{{ patient[0] }}" {% if patient[0] == selected_patient_id %}selected{% endif %}>{{ patient[1] }}</option>
@@ -55,10 +59,10 @@
       </tbody>
     </table>
 
-    <form method="POST">
+    <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="patient_id" value="{{ selected_patient_id }}">
-      <label>Рекомендації: <textarea name="recommendations"></textarea></label><br>
-      <label>Ліки: <textarea name="medication"></textarea></label><br>
+      <label>Рекомендації: <textarea name="recommendations" maxlength="5000"></textarea></label><br>
+      <label>Ліки: <textarea name="medication" maxlength="5000"></textarea></label><br>
       <button type="submit" class="button">Додати запис</button>
     </form>
 

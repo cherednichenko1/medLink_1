@@ -1,0 +1,31 @@
+name: MedLink checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: medlink_test
+          POSTGRES_USER: medlink_test
+          POSTGRES_PASSWORD: ci-only-password
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U medlink_test -d medlink_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://medlink_test:ci-only-password@localhost:5432/medlink_test
+      FLASK_SECRET_KEY: ci-only-secret-with-more-than-thirty-two-characters
+      PDF_FONT_PATH: /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pip-audit
+      - run: python -m unittest discover -s tests -v
+      - run: pip-audit -r requirements.txt
+      - run: docker build -t medlink-app:ci .

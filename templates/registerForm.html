@@ -1,32 +1,31 @@
-<!doctype html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport"
-          content="width=device-width, user-scalable=no, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0">
-    <meta http-equiv="X-UA-Compatible" content="ie=edge">
-    <title>Реєстрація</title>
-</head>
-<body>
-  <form class="registration-form" action="/submitRegistration" method="POST">
-    <h2>Реєстрація</h2>
-    <div class="form-group">
-      <label for="username">Імя</label><br>
-      <input type="text" id="username" name="username" placeholder="Введіть імя" required>
-    </div>
-    <div class="form-group">
-      <label for="email">Email</label><br>
-      <input type="email" id="email" name="email" placeholder="Введіть email" required>
-    </div>
-    <div class="form-group">
-      <label for="password">Password</label><br>
-      <input type="password" id="password" name="password" placeholder="Введіть пароль" required>
-    </div>
-    <div class="form-group">
-      <label for="confirm-password">Підтвердіть пароль</label><br>
-      <input type="password" id="confirm-password" name="confirm_password" placeholder="П" required>
-    </div>
-    <button type="submit" class="submit-button">Register</button>
-  </form>
-</body>
-</html>
+{% extends 'base.html' %}
+{% block body %}
+<h2>Реєстрація</h2>
+{% if error %}<p class="notice error" role="alert">{{ error }}</p>{% endif %}
+<form method="post" action="{{ url_for('registerPage') }}" class="account-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <label>Роль
+    <select name="role" id="registerRole" required>
+      <option value="user">Пацієнт</option>
+      {% if doctor_registration_enabled %}<option value="doctor" {% if values.get('role') == 'doctor' %}selected{% endif %}>Лікар</option>{% endif %}
+    </select>
+  </label>
+  <label>Ім’я та прізвище <input name="name" autocomplete="name" minlength="2" maxlength="150" value="{{ values.get('name', '') }}" required></label>
+  <label>Email <input type="email" name="email" autocomplete="email" maxlength="254" value="{{ values.get('email', '') }}" required></label>
+  <label>Телефон <input type="tel" name="phone" autocomplete="tel" minlength="5" maxlength="30" value="{{ values.get('phone', '') }}" required></label>
+  <label>Пароль <input type="password" name="password" autocomplete="new-password" minlength="12" maxlength="128" required></label>
+  <label>Підтвердження пароля <input type="password" name="confirm_password" autocomplete="new-password" minlength="12" maxlength="128" required></label>
+  <p>Пароль має містити щонайменше 12 символів.</p>
+  {% if doctor_registration_enabled %}
+  <fieldset id="doctorFields" hidden disabled>
+    <legend>Дані лікаря</legend>
+    <label>Код запрошення <input type="password" name="doctor_code" autocomplete="off" required></label>
+    <label>РНОКПП <input name="rnokpp" pattern="[0-9]{10}" maxlength="10" value="{{ values.get('rnokpp', '') }}" required></label>
+    <label>Досвід, років <input type="number" name="experience" min="0" max="80" value="{{ values.get('experience', '') }}" required></label>
+    <label>Лікарня <select name="hospital" required><option value="">Оберіть лікарню</option>{% for id, name in hospitals %}<option value="{{ id }}" {% if values.get('hospital') == id|string %}selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>
+    <label>Спеціалізація <select name="specialization" required><option value="">Оберіть спеціалізацію</option>{% for id, name in specializations %}<option value="{{ id }}" {% if values.get('specialization') == id|string %}selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>
+  </fieldset>
+  {% else %}<p>Реєстрацію лікарів відкриває адміністратор за запрошенням.</p>{% endif %}
+  <button class="button" type="submit">Створити обліковий запис</button>
+</form>
+{% endblock %}

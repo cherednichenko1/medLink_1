@@ -1,46 +1,11 @@
 {% extends 'base.html' %}
-
 {% block body %}
-  <main class="page">
-    <h2>Увійти</h2>
-    <form method="post" action="/getLogin">
-    <div class="form-group">
-      <label>Роль:</label><br>
-      <select name="role" id="roleSelect" onchange="toggleLoginLabel()" required>
-        <option value="doctor">Лікар</option>
-        <option value="user">Користувач</option>
-      </select>
-    </div>
-
-    <div class="form-group">
-      <label id="loginLabel">Email або РНОКПП:</label><br>
-      <input type="text" name="enterLogin" required>
-    </div>
-
-    <div class="form-group">
-      <label>Пароль:</label><br>
-      <input type="password" name="enterPassword" required>
-    </div>
-
-    <button type="submit" class="button">Увійти</button>
-  </form>
-
-  <script>
-    function toggleLoginLabel() {
-      const role = document.getElementById('roleSelect').value;
-      const label = document.getElementById('loginLabel');
-      if (role === 'doctor') {
-        label.textContent = 'Email або РНОКПП:';
-      } else {
-        label.textContent = 'Email:';
-      }
-    }
-  </script>
-
-  </main>
-
-  <footer class="footer">
-    <p>© 2025 MedLink. Всі права захищені.</p>
-  </footer>
+<h2>Увійти</h2>
+<form method="post" action="{{ url_for('get_login') }}" class="account-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <label>Роль <select name="role" id="roleSelect" required><option value="user">Пацієнт</option><option value="doctor">Лікар</option></select></label>
+  <label><span id="loginLabel">Email:</span> <input type="text" name="enterLogin" autocomplete="username" maxlength="254" required></label>
+  <label>Пароль <input type="password" name="enterPassword" autocomplete="current-password" maxlength="128" required></label>
+  <button type="submit" class="button">Увійти</button>
+</form>
 {% endblock %}
-

@@ -47,7 +47,23 @@
         .button:hover {
             background-color: #4169E1; /* Темніший синій при наведенні */
         }
+        nav { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+        nav form { display: inline; }
+        nav button { font: inherit; }
+        .account-form { max-width: 520px; display: grid; gap: 16px; }
+        .account-form label { display: grid; gap: 6px; }
+        input, select, textarea { max-width: 100%; box-sizing: border-box; padding: 8px; font: inherit; }
+        textarea { width: 100%; min-height: 100px; }
+        .notice { padding: 14px; margin: 14px auto; border: 1px solid; border-radius: 6px; max-width: 1100px; }
+        .notice.success { background: #e8f5e9; color: #175b25; }
+        .notice.error { background: #fff0ed; color: #912b16; }
+        .notice button { float: right; margin-left: 12px; cursor: pointer; }
+        .table-scroll { overflow-x: auto; }
+        .data-table { width: 100%; border-collapse: collapse; }
+        .data-table th, .data-table td { padding: 10px; border-bottom: 1px solid #4682B4; text-align: left; }
+        @media (max-width: 600px) { main { padding: 12px; } nav a { margin: 0; } }
     </style>
+    <script src="{{ url_for('static', filename='forms.js') }}" defer></script>
 </head>
 <body>
     <header>
@@ -64,12 +80,20 @@
             {% elif session.user_role == 'doctor' %}
                 <a href="{{ url_for('doctor_cabinet') }}">Кабінет лікаря</a>
             {% endif %}
-            <a href="{{ url_for('logout') }}">Вийти</a>
+            <form method="post" action="{{ url_for('logout') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="button" type="submit">Вийти</button>
+            </form>
         {% else %}
             <a href="{{ url_for('loginPage') }}">Увійти</a>
             <a href="{{ url_for('registerPage') }}">Реєстрація</a>
         {% endif %}
     </nav>
+    {% for category, message in get_flashed_messages(with_categories=true) %}
+    <div class="notice {{ category }}" role="{{ 'alert' if category == 'error' else 'status' }}">
+        <button type="button" data-dismiss-notice aria-label="Закрити повідомлення">×</button>{{ message }}
+    </div>
+    {% endfor %}
     <main>
         {% block body %}{% endblock %}
     </main>

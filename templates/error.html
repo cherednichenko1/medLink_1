@@ -1,0 +1,6 @@
+{% extends 'base.html' %}
+{% block body %}
+<h2>Не вдалося виконати дію ({{ code }})</h2>
+<p class="notice error" role="alert">{{ message }}</p>
+<a href="{{ url_for('main') }}">На головну</a>
+{% endblock %}

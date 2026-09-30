@@ -4,13 +4,13 @@
 <main class="searchPage">
   <h1>Пошук лікарів</h1>
 
-  <form method="POST" style="border: 2px solid #4682B4; padding: 10px; background-color: #FFFAF0;">
-    <label>Досвід (мін. роки): <input type="number" name="experience" min="0"></label><br>
+  <form method="GET" style="border: 2px solid #4682B4; padding: 10px; background-color: #FFFAF0;">
+    <label>Досвід (мін. роки): <input type="number" name="experience" min="0" max="80" value="{{ filters.get('experience', '') }}"></label><br>
     <label>Тип лікарні:
       <select name="hospital_type">
         <option value="">Усі</option>
         {% for type in hospital_types %}
-          <option value="{{ type }}">{{ type }}</option>
+          <option value="{{ type }}" {% if filters.get('hospital_type') == type %}selected{% endif %}>{{ type }}</option>
         {% endfor %}
       </select>
     </label><br>
@@ -18,7 +18,7 @@
       <select name="district">
         <option value="">Усі</option>
         {% for district in districts %}
-          <option value="{{ district }}">{{ district }}</option>
+          <option value="{{ district }}" {% if filters.get('district') == district %}selected{% endif %}>{{ district }}</option>
         {% endfor %}
       </select>
     </label><br>
@@ -26,7 +26,7 @@
       <select name="specialization">
         <option value="">Усі</option>
         {% for spec in specializations %}
-          <option value="{{ spec }}">{{ spec }}</option>
+          <option value="{{ spec }}" {% if filters.get('specialization') == spec %}selected{% endif %}>{{ spec }}</option>
         {% endfor %}
       </select>
     </label><br>
@@ -53,7 +53,7 @@
             <p><strong>Email:</strong> {{ doctor[10] }}</p>
           </td>
           <td style="padding: 10px; vertical-align: top; width: 30%; text-align: center;">
-            <img src="{{ url_for('static', filename='doctor_placeholder.png') }}" alt="Фото лікаря" style="max-width: 150px; height: auto;">
+            <span aria-label="Лікар" role="img">👨‍⚕️</span>
           </td>
         </tr>
         <tr>
@@ -63,19 +63,29 @@
         </tr>
         <tr>
           <td colspan="2" style="padding: 10px;">
-            <form method="POST">
+            {% if session.user_role == 'user' %}
+            <form method="POST" action="{{ url_for('searchPage') }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="doctor_id" value="{{ doctor[0] }}">
-              <label>Дата: <input type="date" name="appointment_date" required></label>
-              <label>Час: <input type="time" name="appointment_time" required></label>
-              {% if not session.user_id %}
-                <label>Email: <input type="email" name="email" required placeholder="Ваш email"></label>
-              {% endif %}
+              <label>Дата: <input type="date" name="appointment_date" min="{{ today }}" max="{{ max_date }}" required></label>
+              <label>Час: <input type="time" name="appointment_time" min="09:00" max="16:30" step="1800" required></label>
               <button type="submit" class="button">Записатися</button>
             </form>
+            <p>Прийом у будні, 09:00–17:00; інтервал 30 хвилин.</p>
+            {% else %}<p>Для запису <a href="{{ url_for('loginPage') }}">увійдіть як пацієнт</a>.</p>{% endif %}
+            {% if doctor_appointments.get(doctor[0]) %}
+            <details><summary>Зайнятий час</summary><ul>{% for date, time in doctor_appointments[doctor[0]] %}<li>{{ date }} — {{ time.strftime('%H:%M') }}</li>{% endfor %}</ul></details>
+            {% endif %}
           </td>
         </tr>
       </table>
+    {% else %}<p>За цими фільтрами лікарів не знайдено.</p>
     {% endfor %}
   </div>
+  <nav aria-label="Сторінки результатів">
+    {% if page > 1 %}<a href="{{ previous_url }}">Попередня сторінка</a>{% endif %}
+    <span>Сторінка {{ page }}</span>
+    {% if has_next %}<a href="{{ next_url }}">Наступна сторінка</a>{% endif %}
+  </nav>
 </main>
 {% endblock %}

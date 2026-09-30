@@ -13,6 +13,12 @@ spec:
       labels:
         app: flask-app
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: flask-app
           # Образ збирається локально і завантажується в Docker-демон minikube
@@ -38,6 +44,28 @@ spec:
             - name: FLASK_SECRET_KEY
               valueFrom:
                 secretKeyRef: {name: medlink-secrets, key: FLASK_SECRET_KEY}
+            - name: DOCTOR_REGISTRATION_CODE
+              valueFrom:
+                secretKeyRef:
+                  name: medlink-secrets
+                  key: DOCTOR_REGISTRATION_CODE
+                  optional: true
+            - name: PUBLIC_BASE_URL
+              value: "http://medlink.local"
+            - name: TRUST_PROXY
+              value: "true"
+            - name: SESSION_COOKIE_SECURE
+              value: "false"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          startupProbe:
+            httpGet:
+              path: /livez
+              port: 5000
+            periodSeconds: 5
+            failureThreshold: 60
           readinessProbe:
             httpGet:
               path: /healthz
@@ -46,7 +74,7 @@ spec:
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              path: /healthz
+              path: /livez
               port: 5000
             initialDelaySeconds: 20
             periodSeconds: 20
@@ -56,4 +84,4 @@ spec:
               memory: 128Mi
             limits:
               cpu: 500m
-              memory: 256Mi
+              memory: 384Mi
