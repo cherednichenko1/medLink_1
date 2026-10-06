@@ -1,6 +1,7 @@
 {% extends 'base.html' %}
 
 {% block body %}
+{% if shared %}<div class="shared-label">Тимчасовий перегляд за QR · посилання діє 15 хвилин від створення. Не передавайте його іншим.</div>{% endif %}
 <div class="userCabinetPage">
   <h2>Інформація про користувача</h2>
   <div class="doctor-info">

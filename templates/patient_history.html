@@ -1,6 +1,7 @@
 {% extends 'base.html' %}
 
 {% block body %}
+{% if shared %}<div class="shared-label">Тимчасовий перегляд за QR · посилання діє 15 хвилин від створення. Не передавайте його іншим.</div>{% endif %}
 <div class="userDoctorPage">
   <h2>Історія хвороб пацієнта: {{ patient.name }}</h2>
   <div class="doctor-info">
@@ -15,7 +16,7 @@
   <div class="patient-history">
     <h3>Історія хвороб</h3>
     {% if history %}
-      <table class="doctorDatabaseTable">
+      <div class="table-scroll"><table class="doctorDatabaseTable">
         <thead>
           <tr>
             <th>Дата</th>
@@ -32,7 +33,7 @@
             </tr>
           {% endfor %}
         </tbody>
-      </table>
+      </table></div>
     {% else %}
       <p>Історія хвороб для цього пацієнта відсутня.</p>
     {% endif %}

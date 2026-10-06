@@ -2,7 +2,7 @@
 {% block body %}
 <h2>Увійти</h2>
 <form method="post" action="{{ url_for('get_login') }}" class="account-form">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input type="hidden" name="next" value="{{ next_url|default('') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <label>Роль <select name="role" id="roleSelect" required><option value="user">Пацієнт</option><option value="doctor">Лікар</option></select></label>
   <label><span id="loginLabel">Email:</span> <input type="text" name="enterLogin" autocomplete="username" maxlength="254" required></label>
   <label>Пароль <input type="password" name="enterPassword" autocomplete="current-password" maxlength="128" required></label>

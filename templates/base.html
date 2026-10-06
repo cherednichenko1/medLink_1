@@ -1,101 +1,50 @@
 <!DOCTYPE html>
 <html lang="uk">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MedLink</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 0;
-            background-color: #FFFAF0; /* Світло-пісочний фон */
-        }
-        header {
-            background-color: #87CEEB; /* Голубий для шапки */
-            color: white;
-            padding: 10px 20px;
-            text-align: center;
-            border: 2px solid #4682B4; /* Синьо-сірий контур */
-        }
-        nav {
-            background-color: #87CEEB; /* Голубий для навігації */
-            padding: 10px;
-            border: 2px solid #4682B4; /* Синьо-сірий контур */
-        }
-        nav a {
-            color: white;
-            text-decoration: none;
-            margin: 0 15px;
-        }
-        nav a:hover {
-            text-decoration: underline;
-        }
-        main {
-            padding: 20px;
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-        .button {
-            background-color: #4682B4; /* Синьо-сірий для кнопок */
-            color: white;
-            padding: 10px 20px;
-            border: 2px solid #4682B4; /* Синьо-сірий контур */
-            border-radius: 5px;
-            cursor: pointer;
-        }
-        .button:hover {
-            background-color: #4169E1; /* Темніший синій при наведенні */
-        }
-        nav { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-        nav form { display: inline; }
-        nav button { font: inherit; }
-        .account-form { max-width: 520px; display: grid; gap: 16px; }
-        .account-form label { display: grid; gap: 6px; }
-        input, select, textarea { max-width: 100%; box-sizing: border-box; padding: 8px; font: inherit; }
-        textarea { width: 100%; min-height: 100px; }
-        .notice { padding: 14px; margin: 14px auto; border: 1px solid; border-radius: 6px; max-width: 1100px; }
-        .notice.success { background: #e8f5e9; color: #175b25; }
-        .notice.error { background: #fff0ed; color: #912b16; }
-        .notice button { float: right; margin-left: 12px; cursor: pointer; }
-        .table-scroll { overflow-x: auto; }
-        .data-table { width: 100%; border-collapse: collapse; }
-        .data-table th, .data-table td { padding: 10px; border-bottom: 1px solid #4682B4; text-align: left; }
-        @media (max-width: 600px) { main { padding: 12px; } nav a { margin: 0; } }
-    </style>
-    <script src="{{ url_for('static', filename='forms.js') }}" defer></script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#4682B4">
+  <title>{% block title %}MedLink — турбота поруч{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="{{ url_for('static', filename='forms.js') }}" defer></script>
 </head>
 <body>
-    <header>
-        <h1>MedLink</h1>
-    </header>
-    <nav>
-        <a href="{{ url_for('main') }}">Головна</a>
-        <a href="{{ url_for('helsiPage') }}">MedLink</a> <!-- Змінено з Helsi на MedLink -->
-        <a href="{{ url_for('searchPage') }}">Пошук лікарів</a>
-
+  <a class="skip-link" href="#content">Перейти до вмісту</a>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="brand" href="{{ url_for('main') }}"><span class="brand-mark" aria-hidden="true">✚</span>Med<span>Link</span></a>
+      <button type="button" class="menu-toggle button secondary" aria-expanded="false" aria-controls="siteNav">Меню</button>
+      <nav id="siteNav" aria-label="Основна навігація">
+        <a href="{{ url_for('main') }}" {% if request.endpoint == 'main' %}aria-current="page"{% endif %}>Головна</a>
+        <a href="{{ url_for('searchPage') }}" {% if request.endpoint == 'searchPage' %}aria-current="page"{% endif %}>Знайти лікаря</a>
+        <a href="{{ url_for('helsiPage') }}">Про нас</a>
         {% if session.user_role %}
-            {% if session.user_role == 'user' %}
-                <a href="{{ url_for('user_cabinet') }}">Особистий кабінет</a>
-            {% elif session.user_role == 'doctor' %}
-                <a href="{{ url_for('doctor_cabinet') }}">Кабінет лікаря</a>
-            {% endif %}
-            <form method="post" action="{{ url_for('logout') }}">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <button class="button" type="submit">Вийти</button>
-            </form>
+          <a href="{{ url_for('doctor_cabinet' if session.user_role == 'doctor' else 'user_cabinet') }}">Мій кабінет</a>
+          <form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="button secondary" type="submit">Вийти</button></form>
         {% else %}
-            <a href="{{ url_for('loginPage') }}">Увійти</a>
-            <a href="{{ url_for('registerPage') }}">Реєстрація</a>
+          <a href="{{ url_for('loginPage') }}">Увійти</a>
+          <a class="button small" href="{{ url_for('registerPage') }}">Реєстрація</a>
         {% endif %}
-    </nav>
-    {% for category, message in get_flashed_messages(with_categories=true) %}
-    <div class="notice {{ category }}" role="{{ 'alert' if category == 'error' else 'status' }}">
-        <button type="button" data-dismiss-notice aria-label="Закрити повідомлення">×</button>{{ message }}
+      </nav>
     </div>
+  </header>
+  <main id="content" class="page-shell">
+    {% for category, message in get_flashed_messages(with_categories=true) %}
+      <div class="notice {{ category }}" role="{{ 'alert' if category == 'error' else 'status' }}"><span>{{ message }}</span><button type="button" data-dismiss-notice aria-label="Закрити повідомлення">×</button></div>
     {% endfor %}
-    <main>
-        {% block body %}{% endblock %}
-    </main>
+    {% block body %}{% endblock %}
+  </main>
+  <footer class="site-footer"><a class="brand" href="{{ url_for('main') }}">Med<span>Link</span></a><span>Ваше здоров’я. Ваш час. Ваша турбота.</span><span>© {{ 'now'|strftime('%Y') }} MedLink</span></footer>
+  <dialog id="qrDialog" data-base-host="{{ qr_base_host }}" class="qr-dialog" aria-labelledby="qrTitle">
+    <div class="dialog-head"><div><span class="eyebrow">ШВИДКИЙ ДОСТУП</span><h2 id="qrTitle">QR-код</h2></div><button type="button" class="icon-button" data-close-qr aria-label="Закрити QR-код">×</button></div>
+    <p id="qrDescription">Наведіть камеру телефона на код.</p>
+    <div class="qr-frame"><p id="qrLoading" role="status">Створюємо QR-код…</p><img id="qrImage" alt="QR-код для відкриття сторінки" width="280" height="280" hidden></div>
+    <p id="qrError" class="notice error" role="alert" hidden></p>
+    <div id="qrShareSection" hidden><label class="checkbox-label"><input id="qrShareConsent" type="checkbox">Дозволити перегляд без входу на 15 хвилин</label><p class="help-text">Людина з цим QR отримає доступ до вибраних персональних даних. Діліться ним лише з довіреною людиною. Закриття вікна не скасовує вже видане посилання.</p></div>
+    <p id="qrAccessHint" class="help-text">На іншому телефоні потрібно увійти у свій обліковий запис.</p>
+    <p id="qrNetworkHint" class="notice error" hidden>Адреса localhost або medlink.local може бути недоступна на телефоні. Налаштуйте адресу сайту для вашої мережі.</p>
+    <button type="button" class="button secondary" data-close-qr>Готово</button>
+    <input id="qrCsrf" type="hidden" value="{{ csrf_token() }}">
+  </dialog>
 </body>
 </html>

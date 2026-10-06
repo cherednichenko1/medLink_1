@@ -1,4 +1,6 @@
 import io
+import base64
+import hashlib
 import os
 import secrets
 from datetime import timedelta
@@ -8,7 +10,7 @@ from urllib.parse import urlsplit
 
 import psycopg2
 import qrcode
-from flask import Flask, abort, flash, redirect, render_template, request, send_file, session, url_for
+from flask import Flask, abort, flash, redirect, render_template, request, send_file, session, url_for, jsonify
 from qrcode.image.svg import SvgPathImage
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -16,6 +18,7 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from itsdangerous import URLSafeTimedSerializer, BadSignature
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -49,6 +52,7 @@ PUBLIC_BASE_URL = os.environ.get('PUBLIC_BASE_URL', 'http://localhost:8080').rst
 parsed_public_url = urlsplit(PUBLIC_BASE_URL)
 if parsed_public_url.scheme not in {'http', 'https'} or not parsed_public_url.netloc or parsed_public_url.query or parsed_public_url.fragment or parsed_public_url.username:
     raise RuntimeError('PUBLIC_BASE_URL має бути адресою http(s) без облікових даних, query або fragment.')
+app.jinja_env.globals['qr_base_host'] = parsed_public_url.hostname
 PASSWORD_METHOD = 'pbkdf2:sha256:1000000'
 # Equivalent work for unknown accounts to reduce account enumeration by timing.
 DUMMY_HASH = generate_password_hash(secrets.token_urlsafe(32), method=PASSWORD_METHOD)
@@ -58,7 +62,7 @@ DUMMY_HASH = generate_password_hash(secrets.token_urlsafe(32), method=PASSWORD_M
 def security_headers(response):
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'DENY'
-    response.headers['Referrer-Policy'] = 'same-origin'
+    response.headers['Referrer-Policy'] = 'no-referrer' if request.endpoint == 'shared_page' else 'same-origin'
     response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
     if request.endpoint != 'static':
         response.headers['Cache-Control'] = 'no-store'
@@ -94,7 +98,7 @@ def server_error(error):
 
 @app.route('/')
 def main():
-    return render_template('base.html')
+    return render_template('home.html')
 
 
 @app.route('/helsiPage')
@@ -104,7 +108,7 @@ def helsiPage():
 
 @app.route('/loginPage')
 def loginPage():
-    return render_template('login.html')
+    return render_template('login.html', next_url=safe_next(request.args.get('next', '')))
 
 
 def registration_form(error=None, status=200):
@@ -174,12 +178,13 @@ def registerPage():
 
 @app.route('/getLogin', methods=['POST'])
 def get_login():
+    destination = safe_next(request.form.get('next', ''))
     role = request.form.get('role')
     login = request.form.get('enterLogin', '').strip().lower()
     password = request.form.get('enterPassword', '')
     if role not in {'user', 'doctor'} or not login or len(login) > 254 or not 1 <= len(password) <= 128:
         flash('Перевірте роль, логін і пароль.', 'error')
-        return redirect(url_for('loginPage'), code=303)
+        return redirect(url_for('loginPage', next=destination), code=303)
     conn = get_db()
     keys = login_keys(role, login)
     with conn.cursor() as cursor:
@@ -197,13 +202,13 @@ def get_login():
     valid = check_password_hash((row[2] if row and row[2] else DUMMY_HASH), password)
     if not row or not valid:
         flash('Невірний логін або пароль.', 'error')
-        return redirect(url_for('loginPage'), code=303)
+        return redirect(url_for('loginPage', next=destination), code=303)
     session.clear()
     session.permanent = True
     session.update(user_role=role, user_id=row[0])
     csrf_token()
     flash('Вхід виконано.', 'success')
-    return redirect(url_for('doctor_cabinet' if role == 'doctor' else 'user_cabinet'), code=303)
+    return redirect(destination or url_for('doctor_cabinet' if role == 'doctor' else 'user_cabinet'), code=303)
 
 
 @app.route('/searchPage', methods=['GET', 'POST'])
@@ -389,7 +394,7 @@ def doctor_info(email):
 @app.route('/user_info/<int:user_id>')
 def user_info(user_id):
     if session.get('user_role') not in {'user', 'doctor'}:
-        abort(403, description='Для перегляду персональних даних потрібно увійти.')
+        return redirect(url_for('loginPage', next=request.path))
     with get_db().cursor() as cursor:
         require_patient_access(cursor, user_id)
         cursor.execute('SELECT name, email, phone FROM "user" WHERE id = %s', (user_id,))
@@ -420,8 +425,84 @@ def patient_records(patient_id):
 
 @app.route('/patient_history/<int:patient_id>')
 def patient_history(patient_id):
+    if session.get('user_role') not in {'user', 'doctor'}:
+        return redirect(url_for('loginPage', next=request.path))
     patient, history = patient_records(patient_id)
     return render_template('patient_history.html', patient=patient, history=history)
+
+
+def safe_next(value):
+    # Only known private read pages; no open redirects or protocol-relative URLs.
+    import re
+    if re.fullmatch(r'/(?:user_info|patient_history)/[1-9][0-9]*', value or ''):
+        return value
+    return ''
+
+
+def share_serializer():
+    return URLSafeTimedSerializer(app.secret_key, salt='medlink-qr-share-v1', signer_kwargs={'digest_method': hashlib.sha256})
+
+
+def decode_share(token):
+    try:
+        data = share_serializer().loads(token, max_age=900)
+    except BadSignature:
+        abort(403, description='Посилання недійсне або його 15-хвилинний термін минув. Попросіть новий QR-код.')
+    if not isinstance(data, dict) or data.get('v') != 1 or data.get('scope') not in {'profile', 'history'}:
+        abort(403)
+    if type(data.get('patient_id')) is not int or data['patient_id'] <= 0:
+        abort(403)
+    if data.get('doctor_id') is not None and (type(data['doctor_id']) is not int or data['doctor_id'] <= 0):
+        abort(403)
+    return data
+
+
+@app.route('/qr/share', methods=['POST'])
+def create_qr_share():
+    scope = request.form.get('scope')
+    if scope not in {'profile', 'history'}:
+        abort(400)
+    patient_id = positive_id(request.form.get('patient_id'))
+    if scope == 'profile':
+        require_role('user')
+        if patient_id != session['user_id']:
+            abort(403)
+        doctor_id = None
+    else:
+        patient_records(patient_id)  # authorize issuer, never accept doctor scope from the client
+        doctor_id = session['user_id'] if session['user_role'] == 'doctor' else None
+    token = share_serializer().dumps({'v': 1, 'scope': scope, 'patient_id': patient_id,
+        'doctor_id': doctor_id, 'nonce': secrets.token_urlsafe(12)})
+    target = public_url('shared_page') + '#' + token
+    # Fragment stays out of server/access logs. The landing page redeems via POST.
+    qr = qrcode.make(target, image_factory=SvgPathImage, box_size=7, border=4)
+    stream = io.BytesIO()
+    qr.save(stream)
+    return jsonify(image='data:image/svg+xml;base64,' + base64.b64encode(stream.getvalue()).decode(),
+                   url=target, expires_in=900)
+
+
+@app.route('/shared', methods=['GET', 'POST'])
+def shared_page():
+    if request.method == 'GET':
+        return render_template('shared.html')
+    data = decode_share(request.form.get('token', ''))
+    with get_db().cursor() as cursor:
+        cursor.execute('SELECT name, email, phone FROM "user" WHERE id = %s', (data['patient_id'],))
+        row = cursor.fetchone()
+        if not row:
+            abort(404)
+        patient = dict(zip(('name', 'email', 'phone'), row))
+        if data['scope'] == 'profile':
+            return render_template('user_info.html', user=patient, shared=True)
+        query = 'SELECT recommendations, medication, timestamp FROM patient_history WHERE patient_id = %s'
+        params = [data['patient_id']]
+        if data['doctor_id'] is not None:
+            query += ' AND doctor_id = %s'
+            params.append(data['doctor_id'])
+        cursor.execute(query + ' ORDER BY timestamp DESC', params)
+        history = cursor.fetchall()
+    return render_template('patient_history.html', patient=patient, history=history, shared=True)
 
 
 def public_url(endpoint, **values):
@@ -436,7 +517,7 @@ def qr_response(target, filename):
     stream = io.BytesIO()
     image.save(stream)
     stream.seek(0)
-    return send_file(stream, mimetype='image/svg+xml', as_attachment=True, download_name=filename)
+    return send_file(stream, mimetype='image/svg+xml', as_attachment=False, download_name=filename)
 
 
 @app.route('/generate_qr_doctor/<email>')

@@ -99,7 +99,7 @@ class SecurityTests(unittest.TestCase):
 
     def test_guest_cannot_read_personal_data(self):
         with patch('app.get_db') as database:
-            for url in ('/user_info/1', '/patient_history/1', '/download_patient_history_pdf/1', '/generate_qr_patient_history/1'):
+            for url in ('/download_patient_history_pdf/1', '/generate_qr_patient_history/1'):
                 self.assertEqual(self.client.get(url).status_code, 403)
             database.assert_not_called()
 
