@@ -47,13 +47,13 @@ class SecurityTests(unittest.TestCase):
             form.assert_called_once()
             database.assert_not_called()
 
-    def test_unicode_invite_rejected(self):
+    def test_unicode_doctor_identifier_rejected(self):
         token = self.token()
-        with patch.dict(os.environ, {'DOCTOR_REGISTRATION_CODE': 'test-invitation'}), patch('app.registration_form', return_value=('invalid', 403)), patch('app.get_db') as database:
+        with patch.dict(os.environ, {'DOCTOR_REGISTRATION_CODE': 'test-invitation'}), patch('app.registration_form', return_value=('invalid', 400)), patch('app.get_db') as database:
             response = self.client.post('/registerPage', data={'csrf_token': token, 'role': 'doctor',
                 'name': 'Лікар', 'email': 'doctor@example.com', 'phone': '+380991234567',
-                'password': 'long secure password', 'confirm_password': 'long secure password', 'doctor_code': 'кирилиця'})
-            self.assertEqual(response.status_code, 403)
+                'password': 'long secure password', 'confirm_password': 'long secure password', 'rnokpp': 'кирилиця'})
+            self.assertEqual(response.status_code, 400)
             database.assert_not_called()
 
     def test_all_templates_compile(self):

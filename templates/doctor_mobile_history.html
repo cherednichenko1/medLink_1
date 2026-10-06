@@ -1,0 +1,17 @@
+{% extends 'base.html' %}
+{% block body %}
+{% include 'doctor_nav.html' %}
+<h1>Історія хвороби: {{ patient_name }}</h1>
+<section class="panel"><h2>Новий медичний запис</h2>
+<form method="post" class="account-form">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<label>Діагноз<textarea name="diagnosis" maxlength="5000" required></textarea></label>
+<label>Рекомендації<textarea name="recommendations" maxlength="5000" required></textarea></label>
+<label>Ліки<textarea name="medication" maxlength="5000"></textarea></label>
+<button class="button" type="submit">Зберегти в історії пацієнта</button>
+</form></section>
+<h2>Ваші записи</h2>
+{% for diagnosis, recommendations, medication, timestamp in history %}
+<article class="panel"><p>{{ timestamp }}</p><h3>{{ diagnosis or 'Діагноз не вказано' }}</h3><p>{{ recommendations }}</p>{% if medication %}<p><strong>Ліки:</strong> {{ medication }}</p>{% endif %}</article>
+{% else %}<p>Ваших записів поки немає.</p>{% endfor %}
+{% endblock %}

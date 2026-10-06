@@ -99,16 +99,54 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(session['user_role'], 'user')
             self.assertNotEqual(session['_csrf'], token)
 
-    def test_doctor_registration_requires_invite(self):
+    def test_public_doctor_registration_and_login(self):
         token = self.csrf()
-        with patch.dict(os.environ, {'DOCTOR_REGISTRATION_CODE': 'secret-invite-code'}):
-            response = self.client.post('/registerPage', data={'csrf_token': token, 'role': 'doctor',
-                'name': 'Новий лікар', 'email': 'newdoctor@example.com', 'phone': '+380991234571',
-                'password': self.password, 'confirm_password': self.password, 'doctor_code': 'wrong'})
-        self.assertEqual(response.status_code, 403)
         with closing(db.get_db_connection()) as conn, conn.cursor() as cursor:
-            cursor.execute('SELECT COUNT(*) FROM doctor')
-            self.assertEqual(cursor.fetchone()[0], 2)
+            cursor.execute('SELECT id FROM hospital ORDER BY id LIMIT 1'); hospital = cursor.fetchone()[0]
+            cursor.execute('SELECT id FROM specialization ORDER BY id LIMIT 1'); specialization = cursor.fetchone()[0]
+        response = self.client.post('/registerPage', data={'csrf_token': token, 'role': 'doctor',
+            'name': 'Новий лікар', 'email': 'newdoctor@example.com', 'phone': '+380991234571',
+            'password': self.password, 'confirm_password': self.password, 'rnokpp': '9876543210',
+            'experience': '5', 'hospital': hospital, 'specialization': specialization})
+        self.assertEqual(response.status_code, 303)
+        self.assertTrue(response.location.endswith('/doctor/login'))
+        with closing(db.get_db_connection()) as conn, conn.cursor() as cursor:
+            cursor.execute("SELECT id,password FROM doctor WHERE email='newdoctor@example.com'")
+            doctor_id, hashed = cursor.fetchone()
+            self.assertTrue(check_password_hash(hashed,self.password))
+            cursor.execute('SELECT COUNT(*) FROM doctor_working_hours WHERE doctor_id=%s',(doctor_id,))
+            self.assertEqual(cursor.fetchone()[0],5)
+        response = self.client.post('/getLogin', data={'csrf_token': token,'role':'doctor',
+            'enterLogin':'newdoctor@example.com','enterPassword':self.password})
+        self.assertEqual(response.status_code,303)
+        with self.client.session_transaction() as session:
+            self.assertEqual(session['user_role'],'doctor')
+
+    def test_qr_mobile_history_login_and_write_permissions(self):
+        self.assertEqual(self.client.get('/doctor/patients/1/history').status_code,302)
+        self.assertIn('/doctor/login?next=',self.client.get('/doctor/patients/1/history').location)
+        self.book()
+        token = self.authenticate(role='doctor')
+        self.assertEqual(self.client.get('/doctor/patients/1/history').status_code,200)
+        data={'csrf_token':token,'diagnosis':'Тестовий діагноз','recommendations':'Рекомендації','medication':'Ліки'}
+        self.assertEqual(self.client.post('/doctor/patients/1/history',data=data).status_code,303)
+        with closing(db.get_db_connection()) as conn, conn.cursor() as cursor:
+            cursor.execute('SELECT diagnosis,doctor_id FROM patient_history WHERE patient_id=1')
+            self.assertEqual(cursor.fetchone(),('Тестовий діагноз',1))
+        self.authenticate(role='doctor',account_id=2)
+        self.assertEqual(self.client.get('/doctor/patients/1/history').status_code,403)
+        data['csrf_token']=self.authenticate(role='user')
+        self.assertEqual(self.client.post('/doctor/patients/1/history',data=data).status_code,403)
+        self.assertEqual(self.client.post('/doctor/patients/1/history',data={}).status_code,400)
+
+    def test_qr_mobile_history_login_returns_to_patient(self):
+        self.book()
+        self.client.post('/logout',data={'csrf_token':self.csrf()})
+        destination='/doctor/patients/1/history'
+        token=self.csrf()
+        response=self.client.post('/getLogin',data={'csrf_token':token,'role':'doctor',
+            'enterLogin':'doctor@example.com','enterPassword':self.password,'next':destination})
+        self.assertEqual(response.location,destination)
 
     def test_duplicate_booking_is_rejected_and_cancellation_releases_slot(self):
         self.assertEqual(self.book().status_code, 303)

@@ -127,7 +127,7 @@ def registration_form(error=None, status=200):
         cursor.execute('SELECT id, name FROM specialization ORDER BY name')
         specializations = cursor.fetchall()
     return render_template('registerForm.html', hospitals=hospitals, specializations=specializations,
-                           error=error, values=request.form, doctor_registration_enabled=bool(os.environ.get('DOCTOR_REGISTRATION_CODE'))), status
+                           error=error, values=request.form if request.method == "POST" else request.args, doctor_registration_enabled=True), status
 
 
 @app.route('/registerPage', methods=['GET', 'POST'])
@@ -147,9 +147,6 @@ def registerPage():
         return registration_form('Пароль має містити 12–128 символів; підтвердження має збігатися.', 400)
     params = [name, email, phone, None]
     if role == 'doctor':
-        invite = os.environ.get('DOCTOR_REGISTRATION_CODE', '')
-        if not invite or not secrets.compare_digest(invite.encode(), request.form.get('doctor_code', '').encode()):
-            return registration_form('Потрібен дійсний код запрошення від адміністратора.', 403)
         rnokpp = request.form.get('rnokpp', '').strip()
         if len(rnokpp) != 10 or not rnokpp.isascii() or not rnokpp.isdigit():
             return registration_form('РНОКПП має містити 10 цифр.', 400)
@@ -428,7 +425,7 @@ def user_info(user_id):
         row = cursor.fetchone()
         if not row:
             abort(404)
-    return render_template('user_info.html', user=dict(zip(('name', 'email', 'phone'), row)))
+    return render_template('user_info.html', user=dict(zip(('name', 'email', 'phone'), row)), patient_id=user_id)
 
 
 def patient_records(patient_id):
@@ -455,13 +452,13 @@ def patient_history(patient_id):
     if session.get('user_role') not in {'user', 'doctor'}:
         return redirect(url_for('loginPage', next=request.path))
     patient, history = patient_records(patient_id)
-    return render_template('patient_history.html', patient=patient, history=history)
+    return render_template('patient_history.html', patient=patient, history=history, patient_id=patient_id)
 
 
 def safe_next(value):
     # Only known private read pages; no open redirects or protocol-relative URLs.
     import re
-    if re.fullmatch(r'/(?:user_info|patient_history)/[1-9][0-9]*', value or ''):
+    if re.fullmatch(r'/(?:user_info/[1-9][0-9]*|patient_history/[1-9][0-9]*|doctor/patients/[1-9][0-9]*/history)', value or ''):
         return value
     return ''
 
@@ -522,7 +519,7 @@ def shared_page():
             abort(404)
         patient = dict(zip(('name', 'email', 'phone'), row))
         if data['scope'] == 'profile':
-            return render_template('user_info.html', user=patient, shared=True)
+            return render_template('user_info.html', user=patient, shared=True, patient_id=data['patient_id'])
         query = 'SELECT recommendations, medication, timestamp, diagnosis FROM patient_history WHERE patient_id = %s'
         params = [data['patient_id']]
         if data['doctor_id'] is not None:
@@ -530,7 +527,7 @@ def shared_page():
             params.append(data['doctor_id'])
         cursor.execute(query + ' ORDER BY timestamp DESC', params)
         history = cursor.fetchall()
-    return render_template('patient_history.html', patient=patient, history=history, shared=True)
+    return render_template('patient_history.html', patient=patient, history=history, shared=True, patient_id=data['patient_id'])
 
 
 def public_url(endpoint, **values):

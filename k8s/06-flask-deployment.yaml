@@ -24,7 +24,7 @@ spec:
           # Образ збирається локально і завантажується в Docker-демон minikube
           # (див. DEPLOY.md, крок з `eval $(minikube docker-env)`),
           # тому pull з реєстру не потрібен.
-          image: medlink-app:v1.0.2
+          image: medlink-app:v1.0.3
           imagePullPolicy: Never
           ports:
             - containerPort: 5000
@@ -44,12 +44,6 @@ spec:
             - name: FLASK_SECRET_KEY
               valueFrom:
                 secretKeyRef: {name: medlink-secrets, key: FLASK_SECRET_KEY}
-            - name: DOCTOR_REGISTRATION_CODE
-              valueFrom:
-                secretKeyRef:
-                  name: medlink-secrets
-                  key: DOCTOR_REGISTRATION_CODE
-                  optional: true
             - name: PUBLIC_BASE_URL
               value: "http://192.168.0.9:8081"
             - name: TRUST_PROXY

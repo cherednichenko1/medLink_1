@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 {% block body %}
-<h2>{{ 'Вхід для лікаря' if doctor_only else 'Увійти' }}</h2><div class="login-tabs"><a href="{{ url_for('loginPage') }}">Я пацієнт</a><a href="{{ url_for('doctor_login') }}">Я лікар</a></div>
+<h2>{{ 'Вхід для лікаря' if doctor_only else 'Увійти' }}</h2><div class="login-tabs"><a href="{{ url_for('loginPage', next=next_url) }}">Я пацієнт</a><a href="{{ url_for('doctor_login', next=next_url) }}">Я лікар</a></div>
 <form method="post" action="{{ url_for('get_login') }}" class="account-form">
   <input type="hidden" name="next" value="{{ next_url|default('') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   {% if doctor_only %}<input type="hidden" name="role" value="doctor">{% else %}<label>Роль <select name="role" id="roleSelect" required><option value="user">Пацієнт</option><option value="doctor">Лікар</option></select></label>{% endif %}
@@ -8,4 +8,5 @@
   <label>Пароль <input type="password" name="enterPassword" autocomplete="current-password" maxlength="128" required></label>
   <button type="submit" class="button">Увійти</button>
 </form>
+<p><a href="{{ url_for('registerPage', role='doctor' if doctor_only else 'user') }}">Створити обліковий запис {{ 'лікаря' if doctor_only else 'пацієнта' }}</a></p>
 {% endblock %}

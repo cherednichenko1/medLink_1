@@ -3,7 +3,7 @@ from datetime import datetime
 
 from flask import Blueprint, abort, flash, redirect, render_template, request, session, url_for
 from db import get_db
-from security import now_local, require_role
+from security import now_local, require_role, require_patient_access
 
 bp = Blueprint('doctor', __name__, url_prefix='/doctor')
 WEEKDAYS = ['Понеділок', 'Вівторок', 'Середа', 'Четвер', 'П’ятниця', 'Субота', 'Неділя']
@@ -99,3 +99,32 @@ def visit(appointment_id):
         cursor.execute('SELECT diagnosis,recommendations,medication FROM patient_history WHERE appointment_id = %s',(appointment_id,))
         result=cursor.fetchone()
     return render_template('doctor_visit.html', visit=visit_data, result=result)
+
+
+@bp.route('/patients/<int:patient_id>/history', methods=['GET', 'POST'])
+def mobile_history(patient_id):
+    if not session.get('user_id'):
+        return redirect(url_for('doctor_login', next=request.path))
+    require_role('doctor')
+    conn = get_db()
+    with conn.cursor() as cursor:
+        require_patient_access(cursor, patient_id)
+        cursor.execute('SELECT name FROM "user" WHERE id = %s', (patient_id,))
+        row = cursor.fetchone()
+        if not row:
+            abort(404)
+        if request.method == 'POST':
+            diagnosis = request.form.get('diagnosis', '').strip()
+            recommendations = request.form.get('recommendations', '').strip()
+            medication = request.form.get('medication', '').strip()
+            if not diagnosis or not recommendations or max(map(len, (diagnosis, recommendations, medication))) > 5000:
+                abort(400, description='Заповніть діагноз і рекомендації; до 5000 символів у кожному полі.')
+            cursor.execute("""INSERT INTO patient_history(patient_id,doctor_id,diagnosis,recommendations,medication)
+                VALUES(%s,%s,%s,%s,%s)""", (patient_id,session['user_id'],diagnosis,recommendations,medication))
+            conn.commit()
+            flash('Медичний запис збережено.', 'success')
+            return redirect(url_for('doctor.mobile_history',patient_id=patient_id),code=303)
+        cursor.execute("""SELECT diagnosis,recommendations,medication,timestamp FROM patient_history
+            WHERE patient_id = %s AND doctor_id = %s ORDER BY timestamp DESC""", (patient_id,session['user_id']))
+        history = cursor.fetchall()
+    return render_template('doctor_mobile_history.html', patient_name=row[0], history=history)

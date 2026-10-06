@@ -1,6 +1,6 @@
 {% extends 'base.html' %}
 {% block body %}
-<h2>Реєстрація</h2>
+<h2>Реєстрація</h2><div class="login-tabs"><a href="{{ url_for('registerPage', role='user') }}">Я пацієнт</a><a href="{{ url_for('registerPage', role='doctor') }}">Я лікар</a></div>
 {% if error %}<p class="notice error" role="alert">{{ error }}</p>{% endif %}
 <form method="post" action="{{ url_for('registerPage') }}" class="account-form">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -17,9 +17,9 @@
   <label>Підтвердження пароля <input type="password" name="confirm_password" autocomplete="new-password" minlength="12" maxlength="128" required></label>
   <p>Пароль має містити щонайменше 12 символів.</p>
   {% if doctor_registration_enabled %}
-  <fieldset id="doctorFields" hidden disabled>
+  <fieldset id="doctorFields" {% if values.get('role') != 'doctor' %}hidden disabled{% endif %}>
     <legend>Дані лікаря</legend>
-    <label>Код запрошення <input type="password" name="doctor_code" autocomplete="off" required></label>
+
     <label>РНОКПП <input name="rnokpp" pattern="[0-9]{10}" maxlength="10" value="{{ values.get('rnokpp', '') }}" required></label>
     <label>Досвід, років <input type="number" name="experience" min="0" max="80" value="{{ values.get('experience', '') }}" required></label>
     <label>Лікарня <select name="hospital" required><option value="">Оберіть лікарню</option>{% for id, name in hospitals %}<option value="{{ id }}" {% if values.get('hospital') == id|string %}selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>

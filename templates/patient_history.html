@@ -1,6 +1,7 @@
 {% extends 'base.html' %}
 
 {% block body %}
+{% if patient_id %}<div class="actions"><a class="button" href="{{ url_for('doctor.mobile_history', patient_id=patient_id) }}">Додати медичний запис як лікар</a></div><p>Для внесення запису потрібні вхід лікаря та доступ до цього пацієнта.</p>{% endif %}
 {% if shared %}<div class="shared-label">Тимчасовий перегляд за QR · посилання діє 15 хвилин від створення. Не передавайте його іншим.</div>{% endif %}
 <div class="userDoctorPage">
   <h2>Історія хвороб пацієнта: {{ patient.name }}</h2>
