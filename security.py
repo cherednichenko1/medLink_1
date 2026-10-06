@@ -53,7 +53,7 @@ def can_access_patient(cursor, patient_id):
         return session.get('user_id') == patient_id
     if session.get('user_role') == 'doctor':
         cursor.execute('''SELECT EXISTS (
-            SELECT 1 FROM appointments WHERE user_id = %s AND doctor_id = %s AND status = 'scheduled'
+            SELECT 1 FROM appointments WHERE user_id = %s AND doctor_id = %s AND status IN ('scheduled', 'in_progress', 'completed')
             UNION ALL SELECT 1 FROM patient_history WHERE patient_id = %s AND doctor_id = %s
         )''', (patient_id, session.get('user_id'), patient_id, session.get('user_id')))
         return cursor.fetchone()[0]
@@ -65,7 +65,7 @@ def require_patient_access(cursor, patient_id):
         abort(403, description='Немає доступу до даних цього пацієнта.')
 
 
-def parse_slot(date_value, time_value):
+def parse_slot(date_value, time_value, use_default_schedule=True):
     try:
         # Require exactly the format rendered by HTML inputs (no seconds/aliases).
         slot = datetime.strptime(f'{date_value} {time_value}', '%Y-%m-%d %H:%M').replace(tzinfo=LOCAL_TZ)
@@ -76,7 +76,7 @@ def parse_slot(date_value, time_value):
     now = now_local()
     if slot <= now or slot.date() > (now + timedelta(days=90)).date():
         raise ValueError('Оберіть майбутній час у межах наступних 90 днів.')
-    if slot.weekday() >= 5 or not 9 <= slot.hour < 17 or slot.minute not in (0, 30):
+    if slot.minute not in (0, 30) or (use_default_schedule and (slot.weekday() >= 5 or not 9 <= slot.hour < 17)):
         raise ValueError('Прийом доступний у будні з 09:00 до 17:00, з інтервалом 30 хвилин.')
     return slot.date(), slot.time().replace(tzinfo=None)
 

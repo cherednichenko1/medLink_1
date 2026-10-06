@@ -3,13 +3,14 @@ import base64
 import hashlib
 import os
 import secrets
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from xml.sax.saxutils import escape
 from urllib.parse import urlsplit
 
 import psycopg2
 import qrcode
+import click
 from flask import Flask, abort, flash, redirect, render_template, request, send_file, session, url_for, jsonify
 from qrcode.image.svg import SvgPathImage
 from reportlab.lib import colors
@@ -44,6 +45,8 @@ app.config.update(
 # deployments where clients can reach Gunicorn directly.
 if os.environ.get('TRUST_PROXY', 'false').lower() == 'true':
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=0)
+from doctor_workflows import bp as doctor_blueprint
+app.register_blueprint(doctor_blueprint)
 app.teardown_appcontext(close_db)
 app.before_request(protect_csrf)
 app.jinja_env.globals['csrf_token'] = csrf_token
@@ -82,6 +85,7 @@ def database_error(error):
 @app.errorhandler(403)
 @app.errorhandler(404)
 @app.errorhandler(405)
+@app.errorhandler(409)
 @app.errorhandler(413)
 @app.errorhandler(429)
 def http_error(error):
@@ -108,7 +112,12 @@ def helsiPage():
 
 @app.route('/loginPage')
 def loginPage():
-    return render_template('login.html', next_url=safe_next(request.args.get('next', '')))
+    return render_template('login.html', next_url=safe_next(request.args.get('next', '')), doctor_only=False)
+
+
+@app.route('/doctor/login')
+def doctor_login():
+    return render_template('login.html', next_url=safe_next(request.args.get('next', '')), doctor_only=True)
 
 
 def registration_form(error=None, status=200):
@@ -167,13 +176,16 @@ def registerPage():
                     VALUES (%s, %s, %s, %s)''', params)
             else:
                 cursor.execute('''INSERT INTO doctor (full_name, email, rnokpp, phone, experience,
-                    hospital_id, specialization_id, password) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)''', params)
+                    hospital_id, specialization_id, password) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id''', params)
+                new_doctor_id = cursor.fetchone()[0]
+                cursor.execute('''INSERT INTO doctor_working_hours(doctor_id,weekday,starts_at,ends_at)
+                    SELECT %s, day, '09:00'::time, '17:00'::time FROM generate_series(0,4) day''', (new_doctor_id,))
         conn.commit()
     except psycopg2.IntegrityError:
         conn.rollback()
         return registration_form('Не вдалося зареєструватися. Перевірте дані або зверніться до адміністратора.', 400)
     flash('Обліковий запис створено. Тепер увійдіть.', 'success')
-    return redirect(url_for('loginPage'), code=303)
+    return redirect(url_for('doctor_login' if role == 'doctor' else 'loginPage'), code=303)
 
 
 @app.route('/getLogin', methods=['POST'])
@@ -184,7 +196,7 @@ def get_login():
     password = request.form.get('enterPassword', '')
     if role not in {'user', 'doctor'} or not login or len(login) > 254 or not 1 <= len(password) <= 128:
         flash('Перевірте роль, логін і пароль.', 'error')
-        return redirect(url_for('loginPage', next=destination), code=303)
+        return redirect(url_for('doctor_login' if role == 'doctor' else 'loginPage', next=destination), code=303)
     conn = get_db()
     keys = login_keys(role, login)
     with conn.cursor() as cursor:
@@ -202,7 +214,7 @@ def get_login():
     valid = check_password_hash((row[2] if row and row[2] else DUMMY_HASH), password)
     if not row or not valid:
         flash('Невірний логін або пароль.', 'error')
-        return redirect(url_for('loginPage', next=destination), code=303)
+        return redirect(url_for('doctor_login' if role == 'doctor' else 'loginPage', next=destination), code=303)
     session.clear()
     session.permanent = True
     session.update(user_role=role, user_id=row[0])
@@ -256,15 +268,19 @@ def searchPage():
         doctors = rows[:50]
         # One query for all doctors rather than one extra query per doctor.
         cursor.execute('''SELECT doctor_id, appointment_date, appointment_time FROM appointments
-            WHERE doctor_id = ANY(%s) AND status = 'scheduled' AND appointment_date >= %s
+            WHERE doctor_id = ANY(%s) AND status IN ('scheduled','in_progress') AND appointment_date >= %s
             ORDER BY appointment_date, appointment_time''', ([d[0] for d in doctors], now_local().date()))
         doctor_appointments = {}
         for doctor_id, date, time in cursor.fetchall():
             doctor_appointments.setdefault(doctor_id, []).append((date, time))
+        cursor.execute('SELECT doctor_id,weekday,starts_at,ends_at FROM doctor_working_hours WHERE doctor_id = ANY(%s) ORDER BY weekday', ([d[0] for d in doctors],))
+        working_hours = {}
+        for id,day,start,end in cursor.fetchall():
+            working_hours.setdefault(id,[]).append((day,start,end))
     today = now_local().date()
     return render_template('searchForm.html', doctors=doctors, hospital_types=hospital_types,
         districts=districts, specializations=specializations, doctor_appointments=doctor_appointments,
-        page=page, has_next=has_next, today=today.isoformat(), max_date=(today + timedelta(days=90)).isoformat(), filters=request.args, next_url=url_for('searchPage', **dict(request.args.to_dict(), page=page + 1)),
+        working_hours=working_hours, page=page, has_next=has_next, today=today.isoformat(), max_date=(today + timedelta(days=90)).isoformat(), filters=request.args, next_url=url_for('searchPage', **dict(request.args.to_dict(), page=page + 1)),
         previous_url=url_for('searchPage', **dict(request.args.to_dict(), page=max(1, page - 1))))
 
 
@@ -272,13 +288,24 @@ def book_appointment():
     require_role('user')
     doctor_id = positive_id(request.form.get('doctor_id'))
     try:
-        date, time = parse_slot(request.form.get('appointment_date'), request.form.get('appointment_time'))
+        date, time = parse_slot(request.form.get('appointment_date'), request.form.get('appointment_time'), use_default_schedule=False)
     except ValueError as error:
         flash(str(error), 'error')
         return redirect(url_for('searchPage'), code=303)
     conn = get_db()
     try:
         with conn.cursor() as cursor:
+            cursor.execute('SELECT id FROM doctor WHERE id = %s FOR UPDATE', (doctor_id,))
+            if not cursor.fetchone():
+                abort(404)
+            cursor.execute('''SELECT starts_at, ends_at FROM doctor_working_hours
+                WHERE doctor_id = %s AND weekday = %s''', (doctor_id, date.weekday()))
+            hours = cursor.fetchone()
+            slot_end = datetime.combine(date, time) + timedelta(minutes=30)
+            if not hours or time < hours[0] or slot_end.date() != date or slot_end.time() > hours[1]:
+                conn.rollback()
+                flash('Лікар не працює в цей час. Перевірте його графік.', 'error')
+                return redirect(url_for('searchPage'), code=303)
             cursor.execute('''INSERT INTO appointments (doctor_id, user_id, appointment_date, appointment_time)
                 VALUES (%s,%s,%s,%s)''', (doctor_id, session['user_id'], date, time))
         conn.commit()
@@ -322,26 +349,26 @@ def doctor_record(cursor, doctor_id):
 @app.route('/doctorCabinet', methods=['GET', 'POST'])
 def doctor_cabinet():
     if session.get('user_role') != 'doctor':
-        return redirect(url_for('loginPage'))
+        return redirect(url_for('doctor_login'))
     patient_value = request.form.get('patient_id') if request.method == 'POST' else request.args.get('patient_id')
     patient_id = positive_id(patient_value) if patient_value else None
     conn = get_db()
     with conn.cursor() as cursor:
         doctor = doctor_record(cursor, session['user_id'])
         cursor.execute('''SELECT u.id, u.name FROM "user" u WHERE EXISTS (
-            SELECT 1 FROM appointments a WHERE a.user_id = u.id AND a.doctor_id = %s AND a.status = 'scheduled'
+            SELECT 1 FROM appointments a WHERE a.user_id = u.id AND a.doctor_id = %s AND a.status IN ('scheduled','in_progress','completed')
         ) OR EXISTS (SELECT 1 FROM patient_history ph WHERE ph.patient_id = u.id AND ph.doctor_id = %s)
         ORDER BY u.name''', (session['user_id'], session['user_id']))
         patients = cursor.fetchall()
         cursor.execute('''SELECT a.appointment_date, a.appointment_time, u.name FROM appointments a
-            LEFT JOIN "user" u ON u.id = a.user_id WHERE a.doctor_id = %s AND a.status = 'scheduled'
+            LEFT JOIN "user" u ON u.id = a.user_id WHERE a.doctor_id = %s AND a.status IN ('scheduled','in_progress')
             AND (a.appointment_date + a.appointment_time) > %s ORDER BY a.appointment_date, a.appointment_time''',
             (session['user_id'], now_local().replace(tzinfo=None)))
         appointments = cursor.fetchall()
         history = []
         if patient_id:
             require_patient_access(cursor, patient_id)
-            cursor.execute('''SELECT patient_id, recommendations, medication, timestamp FROM patient_history
+            cursor.execute('''SELECT patient_id, recommendations, medication, timestamp, diagnosis FROM patient_history
                 WHERE doctor_id = %s AND patient_id = %s ORDER BY timestamp DESC''', (session['user_id'], patient_id))
             history = cursor.fetchall()
         if request.method == 'POST':
@@ -413,7 +440,7 @@ def patient_records(patient_id):
         row = cursor.fetchone()
         if not row:
             abort(404)
-        query = 'SELECT recommendations, medication, timestamp FROM patient_history WHERE patient_id = %s'
+        query = 'SELECT recommendations, medication, timestamp, diagnosis FROM patient_history WHERE patient_id = %s'
         params = [patient_id]
         if session['user_role'] == 'doctor':
             query += ' AND doctor_id = %s'
@@ -473,8 +500,8 @@ def create_qr_share():
         doctor_id = session['user_id'] if session['user_role'] == 'doctor' else None
     token = share_serializer().dumps({'v': 1, 'scope': scope, 'patient_id': patient_id,
         'doctor_id': doctor_id, 'nonce': secrets.token_urlsafe(12)})
-    target = public_url('shared_page') + '#' + token
-    # Fragment stays out of server/access logs. The landing page redeems via POST.
+    target = public_url('shared_page', token=token)
+    # Gateway/Gunicorn logging omits query strings; the template clears the token from history.
     qr = qrcode.make(target, image_factory=SvgPathImage, box_size=7, border=4)
     stream = io.BytesIO()
     qr.save(stream)
@@ -484,9 +511,10 @@ def create_qr_share():
 
 @app.route('/shared', methods=['GET', 'POST'])
 def shared_page():
-    if request.method == 'GET':
-        return render_template('shared.html')
-    data = decode_share(request.form.get('token', ''))
+    token = request.args.get('token', '') if request.method == 'GET' else request.form.get('token', '')
+    if request.method == 'GET' and not token:
+        return render_template('shared.html')  # backward compatibility with old fragment QR
+    data = decode_share(token)
     with get_db().cursor() as cursor:
         cursor.execute('SELECT name, email, phone FROM "user" WHERE id = %s', (data['patient_id'],))
         row = cursor.fetchone()
@@ -495,7 +523,7 @@ def shared_page():
         patient = dict(zip(('name', 'email', 'phone'), row))
         if data['scope'] == 'profile':
             return render_template('user_info.html', user=patient, shared=True)
-        query = 'SELECT recommendations, medication, timestamp FROM patient_history WHERE patient_id = %s'
+        query = 'SELECT recommendations, medication, timestamp, diagnosis FROM patient_history WHERE patient_id = %s'
         params = [data['patient_id']]
         if data['doctor_id'] is not None:
             query += ' AND doctor_id = %s'
@@ -555,7 +583,11 @@ def generate_patient_history_pdf(patient_id):
     if history:
         paragraph = lambda text: Paragraph(escape(str(text or 'Не вказано')).replace('\n', '<br/>'), styles['Normal'])
         data = [[paragraph(text) for text in ('Дата', 'Рекомендації', 'Ліки')]]
-        data += [[paragraph(date), paragraph(recommendations), paragraph(medication)] for recommendations, medication, date in history]
+        for entry in history:
+            recommendations, medication, date = entry[:3]
+            diagnosis = entry[3] if len(entry) > 3 else None
+            details = ('Діагноз: ' + diagnosis + '\n' if diagnosis else '') + (recommendations or '')
+            data.append([paragraph(date), paragraph(details), paragraph(medication)])
         table = Table(data, colWidths=[100, 205, 170], repeatRows=1, splitInRow=1)
         table.setStyle(TableStyle([('FONTNAME', (0, 0), (-1, -1), 'MedLinkUnicode'),
             ('BACKGROUND', (0, 0), (-1, 0), colors.lightblue), ('VALIGN', (0, 0), (-1, -1), 'TOP'),
@@ -590,12 +622,41 @@ def livez():
 def healthz():
     try:
         with get_db().cursor() as cursor:
-            cursor.execute('SELECT 1 FROM schema_migrations WHERE version = 1')
+            cursor.execute('SELECT 1 FROM schema_migrations WHERE version = 2')
             if not cursor.fetchone():
                 return {'status': 'unavailable'}, 503
         return {'status': 'ok'}, 200
     except psycopg2.Error:
         return {'status': 'unavailable'}, 503
+
+
+@app.cli.command('create-doctor')
+@click.option('--name', prompt='ПІБ лікаря')
+@click.option('--email', prompt='Email')
+@click.option('--phone', prompt='Телефон')
+@click.option('--rnokpp', prompt='РНОКПП')
+@click.option('--experience', type=click.IntRange(0,80), prompt='Досвід (років)')
+@click.option('--hospital-id', type=click.IntRange(min=1), prompt='ID лікарні')
+@click.option('--specialization-id', type=click.IntRange(min=1), prompt='ID спеціалізації')
+@click.password_option(prompt='Пароль (12–128 символів)')
+def create_doctor(name,email,phone,rnokpp,experience,hospital_id,specialization_id,password):
+    """Admin-only CLI provisioning; never creates a public privilege-grant route."""
+    email=email.strip().lower()
+    if not valid_email(email) or not 2 <= len(name.strip()) <= 150 or not 5 <= len(phone.strip()) <= 30 or not 12 <= len(password) <= 128 or len(rnokpp) != 10 or not rnokpp.isascii() or not rnokpp.isdigit():
+        raise click.ClickException('Перевірте дані лікаря та довжину пароля.')
+    conn=get_db()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("""INSERT INTO doctor(full_name,email,phone,rnokpp,experience,hospital_id,specialization_id,password)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",(name.strip(),email,phone.strip(),rnokpp,experience,hospital_id,specialization_id,generate_password_hash(password,method=PASSWORD_METHOD)))
+            id=cursor.fetchone()[0]
+            cursor.execute("""INSERT INTO doctor_working_hours(doctor_id,weekday,starts_at,ends_at)
+                SELECT %s,day,'09:00'::time,'17:00'::time FROM generate_series(0,4) day""",(id,))
+        conn.commit()
+    except psycopg2.IntegrityError:
+        conn.rollback()
+        raise click.ClickException('Конфлікт email/РНОКПП або некоректна лікарня/спеціалізація.') from None
+    click.echo('Обліковий запис лікаря створено. Вхід: /doctor/login')
 
 
 if __name__ == '__main__':

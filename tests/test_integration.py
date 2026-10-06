@@ -54,6 +54,8 @@ class DatabaseTests(unittest.TestCase):
                 VALUES ('Лікар','doctor@example.com','1234567890','+380991234569',5,%s,%s,%s),
                 ('Інший лікар','otherdoctor@example.com','1234567891','+380991234570',5,%s,%s,%s)''',
                 (hospital, specialization, self.password_hash, hospital, specialization, self.password_hash))
+        with closing(db.get_db_connection()) as conn, conn, conn.cursor() as cursor:
+            cursor.execute("INSERT INTO doctor_working_hours(doctor_id,weekday,starts_at,ends_at) SELECT id,day,'09:00'::time,'17:00'::time FROM doctor CROSS JOIN generate_series(0,4) day")
         self.client = app.test_client()
         day = now_local().date() + timedelta(days=1)
         while day.weekday() >= 5:
@@ -174,6 +176,65 @@ class DatabaseTests(unittest.TestCase):
                 cursor.execute('INSERT INTO appointments (doctor_id,user_id,appointment_date,appointment_time) VALUES (1,1,%s,%s)', (self.day, '09:00'))
             with self.assertRaises(psycopg2.errors.UniqueViolation), conn, conn.cursor() as cursor:
                 cursor.execute('INSERT INTO appointments (doctor_id,user_id,appointment_date,appointment_time) VALUES (1,2,%s,%s)', (self.day, '09:00'))
+
+    def test_doctor_login_and_calendar(self):
+        token=self.csrf()
+        response=self.client.post('/getLogin',data={'csrf_token':token,'role':'doctor','enterLogin':'doctor@example.com','enterPassword':self.password})
+        self.assertEqual(response.status_code,303)
+        self.assertIn('/doctorCabinet',response.location)
+        self.assertEqual(self.client.get('/doctor/appointments').status_code,200)
+        self.assertEqual(self.client.get('/doctor/schedule').status_code,200)
+
+    def test_patient_cannot_use_doctor_processes(self):
+        token=self.authenticate()
+        for url in ('/doctor/schedule','/doctor/appointments','/doctor/appointments/1'):
+            self.assertEqual(self.client.get(url).status_code,403)
+        self.assertEqual(self.client.post('/doctor/schedule',data={'csrf_token':token}).status_code,403)
+
+    def today_visit(self):
+        with closing(db.get_db_connection()) as conn,conn,conn.cursor() as cursor:
+            cursor.execute("INSERT INTO appointments(doctor_id,user_id,appointment_date,appointment_time) VALUES(1,1,%s,'00:00') RETURNING id",(now_local().date(),))
+            return cursor.fetchone()[0]
+
+    def test_doctor_start_complete_and_single_medical_record(self):
+        id=self.today_visit()
+        token=self.authenticate('doctor',1)
+        self.assertEqual(self.client.post(f'/doctor/appointments/{id}',data={'csrf_token':token,'action':'start'}).status_code,303)
+        form={'csrf_token':token,'action':'complete','diagnosis':'Тестовий діагноз','recommendations':'Відпочинок','medication':'Не призначено'}
+        self.assertEqual(self.client.post(f'/doctor/appointments/{id}',data=form).status_code,303)
+        self.assertEqual(self.client.post(f'/doctor/appointments/{id}',data=form).status_code,409)
+        with closing(db.get_db_connection()) as conn,conn.cursor() as cursor:
+            cursor.execute('SELECT status FROM appointments WHERE id=%s',(id,))
+            self.assertEqual(cursor.fetchone()[0],'completed')
+            cursor.execute('SELECT diagnosis,COUNT(*) OVER() FROM patient_history WHERE appointment_id=%s',(id,))
+            self.assertEqual(cursor.fetchone(),('Тестовий діагноз',1))
+        self.authenticate('user',1)
+        self.assertIn('Тестовий діагноз'.encode(),self.client.get('/patient_history/1').data)
+
+    def test_doctor_cannot_manage_other_doctors_visit(self):
+        id=self.today_visit()
+        token=self.authenticate('doctor',2)
+        self.assertEqual(self.client.get(f'/doctor/appointments/{id}').status_code,404)
+        self.assertEqual(self.client.post(f'/doctor/appointments/{id}',data={'csrf_token':token,'action':'start'}).status_code,404)
+
+    def test_schedule_controls_new_bookings_and_preserves_existing(self):
+        self.book()
+        token=self.authenticate('doctor',1)
+        self.assertEqual(self.client.post('/doctor/schedule',data={'csrf_token':token}).status_code,303)
+        with closing(db.get_db_connection()) as conn,conn.cursor() as cursor:
+            cursor.execute("SELECT COUNT(*) FROM appointments WHERE status='scheduled'")
+            self.assertEqual(cursor.fetchone()[0],1)
+        token=self.authenticate('user',2)
+        response=self.client.post('/searchPage',data={'csrf_token':token,'doctor_id':'1','appointment_date':self.day,'appointment_time':'10:00'},follow_redirects=True)
+        self.assertIn('Лікар не працює'.encode(),response.data)
+
+    def test_cancelled_or_unstarted_visit_cannot_be_completed(self):
+        id=self.today_visit()
+        token=self.authenticate('doctor',1)
+        form={'csrf_token':token,'action':'complete','diagnosis':'Тест','recommendations':'Тест'}
+        self.assertEqual(self.client.post(f'/doctor/appointments/{id}',data=form).status_code,409)
+        self.assertEqual(self.client.post(f'/doctor/appointments/{id}',data={'csrf_token':token,'action':'cancel'}).status_code,303)
+        self.assertEqual(self.client.post(f'/doctor/appointments/{id}',data={'csrf_token':token,'action':'start'}).status_code,409)
 
 
 @unittest.skipUnless(TEST_URL, 'TEST_DATABASE_URL not set; migration test requires real PostgreSQL')

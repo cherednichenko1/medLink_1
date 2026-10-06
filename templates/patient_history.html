@@ -20,7 +20,7 @@
         <thead>
           <tr>
             <th>Дата</th>
-            <th>Рекомендації</th>
+            <th>Діагноз</th><th>Рекомендації</th>
             <th>Ліки</th>
           </tr>
         </thead>
@@ -28,7 +28,7 @@
           {% for entry in history %}
             <tr>
               <td>{{ entry[2] }}</td>
-              <td>{{ entry[0] or 'Не вказано' }}</td>
+              <td>{{ entry[3] or 'Не вказано' }}</td><td>{{ entry[0] or 'Не вказано' }}</td>
               <td>{{ entry[1] or 'Не вказано' }}</td>
             </tr>
           {% endfor %}

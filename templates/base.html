@@ -23,7 +23,7 @@
           <form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button class="button secondary" type="submit">Вийти</button></form>
         {% else %}
           <a href="{{ url_for('loginPage') }}">Увійти</a>
-          <a class="button small" href="{{ url_for('registerPage') }}">Реєстрація</a>
+          <a href="{{ url_for('doctor_login') }}">Для лікаря</a><a class="button small" href="{{ url_for('registerPage') }}">Реєстрація</a>
         {% endif %}
       </nav>
     </div>

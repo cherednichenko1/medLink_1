@@ -1,6 +1,7 @@
 import os
 import time
 import unittest
+from urllib.parse import parse_qs,urlsplit
 from unittest.mock import MagicMock, patch
 os.environ.setdefault('FLASK_SECRET_KEY', 'test-only-secret-at-least-thirty-two-characters-long')
 from app import app, share_serializer, decode_share, safe_next
@@ -52,10 +53,10 @@ class QrTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.get_json()
         self.assertEqual(data['expires_in'], 900)
-        self.assertIn('/shared#',data['url'])
+        self.assertIn('/shared?token=',data['url'])
         self.assertTrue(data['image'].startswith('data:image/svg+xml;base64,'))
         with app.test_request_context():
-            payload = decode_share(data['url'].split('#')[1])
+            payload = decode_share(parse_qs(urlsplit(data['url']).query)['token'][0])
             self.assertEqual(payload['patient_id'],1)
             self.assertEqual(payload['scope'],'profile')
 
@@ -80,6 +81,25 @@ class QrTests(unittest.TestCase):
         self.assertEqual(response.headers['Referrer-Policy'],'no-referrer')
         self.assertEqual(response.headers['Cache-Control'],'no-store')
 
+    def test_shared_query_url_opens_without_javascript_or_cookie(self):
+        with app.test_request_context():
+            token=share_serializer().dumps({'v':1,'scope':'history','patient_id':1,'doctor_id':None})
+        conn=MagicMock();cursor=conn.cursor.return_value.__enter__.return_value
+        cursor.fetchone.return_value=('Пацієнт','patient@example.com','+38099')
+        cursor.fetchall.return_value=[('Рекомендації','Ліки','2026-10-06','Діагноз')]
+        phone=app.test_client(use_cookies=False)
+        with patch('app.get_db',return_value=conn):
+            response=phone.get('/shared',query_string={'token':token})
+        self.assertEqual(response.status_code,200)
+        self.assertIn('Діагноз'.encode(),response.data)
+        self.assertNotIn(b'id="sharedRedeem"',response.data)
+
+    def test_separate_doctor_login_form(self):
+        response=self.client.get('/doctor/login')
+        self.assertEqual(response.status_code,200)
+        self.assertIn('Вхід для лікаря'.encode(),response.data)
+        self.assertIn(b'name="role" value="doctor"',response.data)
+
     def test_doctor_share_keeps_own_history_scope(self):
         token=self.csrf()
         with self.client.session_transaction() as session:
@@ -88,13 +108,13 @@ class QrTests(unittest.TestCase):
             response=self.client.post('/qr/share',data={'csrf_token':token,'scope':'history','patient_id':'7','doctor_id':'99'})
             authorization.assert_called_once_with(7)
         with app.test_request_context():
-            data=decode_share(response.get_json()['url'].split('#')[1])
+            data=decode_share(parse_qs(urlsplit(response.get_json()['url']).query)['token'][0])
             self.assertEqual(data['doctor_id'],5)
         conn=MagicMock();cursor=conn.cursor.return_value.__enter__.return_value
         cursor.fetchone.return_value=('Пацієнт','patient@example.com','+38099')
         cursor.fetchall.return_value=[]
         with patch('app.get_db',return_value=conn):
-            response=self.client.post('/shared',data={'csrf_token':token,'token':response.get_json()['url'].split('#')[1]})
+            response=self.client.post('/shared',data={'csrf_token':token,'token':parse_qs(urlsplit(response.get_json()['url']).query)['token'][0]})
         self.assertEqual(response.status_code,200)
         self.assertEqual(cursor.execute.call_args.args[1],[7,5])
 

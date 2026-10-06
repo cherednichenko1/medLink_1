@@ -56,6 +56,7 @@ def init_db():
             version INTEGER PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP)''')
         cursor.execute('SELECT version FROM schema_migrations WHERE version = 1')
         if cursor.fetchone():
+            migrate_doctor_workflows(cursor)
             return
         cursor.execute('''CREATE TABLE IF NOT EXISTS district (
             id SERIAL PRIMARY KEY, name TEXT NOT NULL)''')
@@ -119,7 +120,31 @@ def init_db():
         if cursor.fetchone()[0] == 0:
             cursor.execute("INSERT INTO specialization (name) VALUES ('Терапевт')")
         cursor.execute('INSERT INTO schema_migrations (version) VALUES (1)')
+        migrate_doctor_workflows(cursor)
     print('MedLink: міграцію БД завершено.')
+
+
+def migrate_doctor_workflows(cursor):
+    cursor.execute('SELECT version FROM schema_migrations WHERE version = 2')
+    if cursor.fetchone():
+        return
+    cursor.execute('ALTER TABLE appointments DROP CONSTRAINT IF EXISTS appointments_status_check')
+    cursor.execute("""ALTER TABLE appointments ADD CONSTRAINT appointments_status_check
+        CHECK (status IN ('scheduled', 'in_progress', 'completed', 'cancelled'))""")
+    cursor.execute('DROP INDEX IF EXISTS appointments_slot_unique')
+    cursor.execute("""CREATE UNIQUE INDEX appointments_slot_unique ON appointments
+        (doctor_id, appointment_date, appointment_time) WHERE status IN ('scheduled','in_progress')""")
+    cursor.execute('ALTER TABLE patient_history ADD COLUMN IF NOT EXISTS diagnosis TEXT')
+    cursor.execute('ALTER TABLE patient_history ADD COLUMN IF NOT EXISTS appointment_id INTEGER REFERENCES appointments(id)')
+    cursor.execute('CREATE UNIQUE INDEX IF NOT EXISTS history_appointment_unique ON patient_history(appointment_id) WHERE appointment_id IS NOT NULL')
+    cursor.execute("""CREATE TABLE IF NOT EXISTS doctor_working_hours (
+        doctor_id INTEGER NOT NULL REFERENCES doctor(id), weekday INTEGER NOT NULL CHECK (weekday BETWEEN 0 AND 6),
+        starts_at TIME NOT NULL, ends_at TIME NOT NULL,
+        CHECK (starts_at < ends_at), PRIMARY KEY (doctor_id, weekday))""")
+    cursor.execute("""INSERT INTO doctor_working_hours (doctor_id, weekday, starts_at, ends_at)
+        SELECT d.id, day, '09:00'::time, '17:00'::time FROM doctor d CROSS JOIN generate_series(0,4) day
+        ON CONFLICT DO NOTHING""")
+    cursor.execute('INSERT INTO schema_migrations(version) VALUES (2)')
 
 
 if __name__ == '__main__':

@@ -10,3 +10,5 @@
 .profile-card>.actions{margin-top:24px}.panel>form:not(.account-form){margin-bottom:26px}.panel h3{margin-top:24px}.medlinkPage>div{background:white;padding:30px;border:1px solid var(--line);border-radius:24px}.medlinkPage li{line-height:1.7;margin-bottom:14px;color:var(--muted)}.account-form+h2{margin-top:24px}
 
 .page-shell:has(>.account-form)>h2{text-align:center;font-size:2rem}.data-table td{overflow-wrap:anywhere}.patient-history td{max-width:400px}
+
+.doctor-nav,.login-tabs{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:28px}.doctor-nav a,.login-tabs a{background:#edf5f8;padding:12px 18px;border-radius:12px;font-size:13px;font-weight:650}.login-tabs{justify-content:center}.schedule-grid{display:grid;gap:16px;margin-bottom:24px}.schedule-row{display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:16px;align-items:center}.schedule-row>label:not(.checkbox-label){display:grid;gap:8px;font-size:12px}@media(max-width:680px){.schedule-row{grid-template-columns:1fr 1fr}.schedule-row>.checkbox-label{grid-column:1/-1}}

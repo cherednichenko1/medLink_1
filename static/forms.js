@@ -110,6 +110,7 @@ qrDialog?.addEventListener('close', () => {
   qrImage.hidden = true;
   activeQrButton?.focus();
 });
+if (window.location.pathname === '/shared' && window.location.search) history.replaceState(null, '', window.location.pathname);
 const redeemForm = document.getElementById('sharedRedeem');
 if (redeemForm) {
   const token = window.location.hash.slice(1);

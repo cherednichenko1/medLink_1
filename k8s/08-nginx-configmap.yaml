@@ -5,8 +5,10 @@ metadata:
   namespace: medlink
 data:
   default.conf: |
+    log_format medlink_safe '$remote_addr [$time_local] "$request_method $uri" $status $body_bytes_sent';
     server {
         listen 80;
+        access_log /var/log/nginx/access.log medlink_safe;
         server_name _;
 
         client_max_body_size 10M;

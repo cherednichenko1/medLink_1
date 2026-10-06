@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py db.py security.py ./
+COPY app.py db.py security.py doctor_workflows.py ./
 COPY templates/ templates/
 COPY static/ static/
 
@@ -21,4 +21,4 @@ EXPOSE 5000
 
 # Schema initialization runs once per container, before worker processes start.
 # The transaction lock serializes concurrent Kubernetes replicas.
-CMD ["sh", "-c", "python -c 'from app import init_db; init_db()' && exec gunicorn --bind 0.0.0.0:5000 --workers 2 --timeout 60 --access-logfile - --error-logfile - app:app"]
+CMD ["sh", "-c", "python -c 'from app import init_db; init_db()' && exec gunicorn --bind 0.0.0.0:5000 --workers 2 --timeout 60 --access-logfile - --access-logformat '%(h)s %(s)s %(L)s' --error-logfile - app:app"]

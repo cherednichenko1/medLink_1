@@ -3,6 +3,8 @@ kind: Ingress
 metadata:
   name: medlink-ingress
   namespace: medlink
+  annotations:
+    nginx.ingress.kubernetes.io/enable-access-log: "false"
 spec:
   ingressClassName: nginx
   rules:
