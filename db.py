@@ -58,6 +58,7 @@ def init_db():
         if cursor.fetchone():
             migrate_doctor_workflows(cursor)
             migrate_portal(cursor)
+            migrate_communications(cursor)
             return
         cursor.execute('''CREATE TABLE IF NOT EXISTS district (
             id SERIAL PRIMARY KEY, name TEXT NOT NULL)''')
@@ -123,6 +124,7 @@ def init_db():
         cursor.execute('INSERT INTO schema_migrations (version) VALUES (1)')
         migrate_doctor_workflows(cursor)
         migrate_portal(cursor)
+        migrate_communications(cursor)
     print('MedLink: міграцію БД завершено.')
 
 
@@ -149,8 +151,6 @@ def migrate_doctor_workflows(cursor):
     cursor.execute('INSERT INTO schema_migrations(version) VALUES (2)')
 
 
-if __name__ == '__main__':
-    init_db()
 
 
 def migrate_portal(cursor):
@@ -165,3 +165,20 @@ def migrate_portal(cursor):
         CHECK((content IS NULL) = (deleted_at IS NOT NULL)))""")
     cursor.execute('CREATE INDEX documents_patient_idx ON patient_documents(patient_id,created_at DESC) WHERE content IS NOT NULL')
     cursor.execute('INSERT INTO schema_migrations(version) VALUES(3)')
+
+
+def migrate_communications(cursor):
+    cursor.execute('SELECT version FROM schema_migrations WHERE version=4')
+    if cursor.fetchone(): return
+    cursor.execute("""CREATE TABLE conversations(id SERIAL PRIMARY KEY,patient_id INTEGER NOT NULL REFERENCES "user"(id),doctor_id INTEGER NOT NULL REFERENCES doctor(id),UNIQUE(patient_id,doctor_id))""")
+    cursor.execute("""CREATE TABLE messages(id SERIAL PRIMARY KEY,conversation_id INTEGER NOT NULL REFERENCES conversations(id),sender_role TEXT NOT NULL CHECK(sender_role IN ('user','doctor')),body TEXT NOT NULL CHECK(length(body)<=4000),attachment_id INTEGER REFERENCES patient_documents(id),created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+    cursor.execute('CREATE INDEX messages_thread_idx ON messages(conversation_id,id)')
+    cursor.execute("""CREATE TABLE video_calls(id UUID PRIMARY KEY,conversation_id INTEGER NOT NULL REFERENCES conversations(id),initiator_role TEXT NOT NULL CHECK(initiator_role IN ('user','doctor')),created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,expires_at TIMESTAMPTZ NOT NULL,ended_at TIMESTAMPTZ)""")
+    cursor.execute('CREATE UNIQUE INDEX active_call_unique ON video_calls(conversation_id) WHERE ended_at IS NULL')
+    cursor.execute("""CREATE TABLE call_signals(id BIGSERIAL PRIMARY KEY,call_id UUID NOT NULL REFERENCES video_calls(id),sender_role TEXT NOT NULL CHECK(sender_role IN ('user','doctor')),kind TEXT NOT NULL CHECK(kind IN ('offer','answer','candidate','hangup')),payload TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+    cursor.execute('CREATE INDEX signals_call_idx ON call_signals(call_id,id)')
+    cursor.execute('INSERT INTO schema_migrations(version) VALUES(4)')
+
+
+if __name__ == '__main__':
+    init_db()

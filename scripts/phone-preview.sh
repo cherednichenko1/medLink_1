@@ -14,7 +14,7 @@ case "$medlink_ip" in
 esac
 medlink_url="http://$medlink_ip:8081"
 echo "Телефон і комп’ютер мають бути в одній мережі Wi-Fi. Адреса: $medlink_url"
-kubectl set env -n medlink deployment/flask-app "PUBLIC_BASE_URL=$medlink_url"
+kubectl set env -n medlink deployment/flask-app "PUBLIC_BASE_URL=$medlink_url" SESSION_COOKIE_SECURE=false
 kubectl rollout status -n medlink deployment/flask-app --timeout=300s
 echo 'Відкрийте цю адресу на комп’ютері й телефоні. Тримайте термінал відкритим; Ctrl+C зупиняє доступ.'
 exec kubectl port-forward -n medlink --address="$medlink_ip" service/nginx-service 8081:80

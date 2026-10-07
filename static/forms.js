@@ -58,7 +58,7 @@ document.querySelectorAll('[data-qr-src]').forEach(button => {
     document.getElementById('qrTitle').textContent = button.dataset.qrTitle || 'QR-код';
     const privateQr = Boolean(button.dataset.qrScope);
     document.getElementById('qrShareSection').hidden = !privateQr;
-    document.getElementById('qrAccessHint').textContent = privateQr ? 'На іншому телефоні потрібно увійти. Або дозвольте тимчасовий перегляд нижче.' : button.dataset.qrSrc === '/workspace/qr' ? 'Відскануйте QR на іншому пристрої й увійдіть у свій кабінет. QR не містить пароля.' : 'Публічна сторінка лікаря відкривається без входу.';
+    document.getElementById('qrAccessHint').textContent = privateQr ? 'На іншому телефоні потрібно увійти. Або дозвольте тимчасовий перегляд нижче.' : (button.dataset.qrSrc === '/workspace/qr' || button.dataset.qrSrc.startsWith('/messages/')) ? 'Відскануйте QR на іншому пристрої й увійдіть у свій кабінет. QR не містить пароля.' : 'Публічна сторінка лікаря відкривається без входу.';
     document.getElementById('qrNetworkHint').hidden = !['localhost', '127.0.0.1', 'medlink.local', '::1'].includes(qrDialog.dataset.baseHost);
     shareConsent.checked = false;
     shareConsent.disabled = false;

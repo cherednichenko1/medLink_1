@@ -42,7 +42,7 @@ class DatabaseTests(unittest.TestCase):
 
     def setUp(self):
         with closing(db.get_db_connection()) as conn, conn, conn.cursor() as cursor:
-            cursor.execute('TRUNCATE patient_documents, appointments, patient_history, doctor, "user", login_attempts RESTART IDENTITY CASCADE')
+            cursor.execute('TRUNCATE call_signals, video_calls, messages, conversations, patient_documents, appointments, patient_history, doctor, "user", login_attempts RESTART IDENTITY CASCADE')
             cursor.execute('''INSERT INTO "user" (name,email,phone,password) VALUES
                 ('Пацієнт','patient@example.com','+380991234567',%s),
                 ('Інший','other@example.com','+380991234568',%s)''', (self.password_hash, self.password_hash))
@@ -98,6 +98,67 @@ class DatabaseTests(unittest.TestCase):
         with self.client.session_transaction() as session:
             self.assertEqual(session['user_role'], 'user')
             self.assertNotEqual(session['_csrf'], token)
+
+    def open_chat(self):
+        self.book()
+        token=self.authenticate()
+        response=self.client.post('/messages/start/1',data={'csrf_token':token})
+        self.assertEqual(response.status_code,303)
+        return response.location,token
+
+    def test_chat_messages_and_membership(self):
+        route,token=self.open_chat()
+        self.assertEqual(self.client.post(route,data={'csrf_token':token,'text':'Фото додано'}).status_code,303)
+        self.assertEqual(self.client.get(route+'/updates').json['messages'][0]['text'],'Фото додано')
+        self.authenticate(role='doctor')
+        self.assertEqual(self.client.get(route).status_code,200)
+        self.assertEqual(self.client.get(route+'/qr').mimetype,'image/svg+xml')
+        self.authenticate(role='doctor',account_id=2)
+        self.assertEqual(self.client.get(route+'/updates').status_code,403)
+        self.authenticate(account_id=2)
+        self.assertEqual(self.client.get(route).status_code,403)
+
+    def test_chat_rejects_unrelated_partner_and_csrf(self):
+        token=self.authenticate()
+        self.assertEqual(self.client.post('/messages/start/2',data={'csrf_token':token}).status_code,403)
+        self.assertEqual(self.client.post('/messages/start/1',data={}).status_code,400)
+
+    def test_chat_qr_login_preserves_target(self):
+        route,token=self.open_chat()
+        self.client.post('/logout',data={'csrf_token':token})
+        self.assertIn('/loginPage?next=',self.client.get(route).location)
+        token=self.csrf()
+        response=self.client.post('/getLogin',data={'csrf_token':token,'role':'user','enterLogin':'patient@example.com','enterPassword':self.password,'next':route})
+        self.assertEqual(response.location,route)
+
+    def test_call_signals_private_roles_and_hangup(self):
+        import json
+        route,token=self.open_chat()
+        response=self.client.post(route+'/call',data={'csrf_token':token})
+        call=response.location
+        self.assertEqual(self.client.post(route+'/call',data={'csrf_token':token}).location,call)
+        signal=call+'/signals'
+        self.assertEqual(self.client.post(signal,data={'csrf_token':token,'kind':'offer','payload':json.dumps({'type':'offer','sdp':'v=0'})}).status_code,200)
+        token=self.authenticate(role='doctor')
+        self.assertEqual(self.client.get(signal).json['signals'][0]['kind'],'offer')
+        self.assertEqual(self.client.post(signal,data={'csrf_token':token,'kind':'offer','payload':json.dumps({'type':'offer','sdp':'v=0'})}).status_code,403)
+        self.assertEqual(self.client.post(signal,data={'csrf_token':token,'kind':'answer','payload':json.dumps({'type':'answer','sdp':'v=0'})}).status_code,200)
+        self.authenticate(role='doctor',account_id=2)
+        self.assertEqual(self.client.get(signal).status_code,403)
+        token=self.authenticate()
+        self.assertEqual(self.client.post(signal,data={'csrf_token':token,'kind':'hangup','payload':'{}'}).status_code,200)
+        self.assertTrue(self.client.get(signal).json['ended'])
+        self.assertEqual(self.client.get(call).status_code,410)
+        self.assertNotEqual(self.client.post(route+'/call',data={'csrf_token':token}).location,call)
+
+    def test_call_rejects_bad_signals_and_expiry(self):
+        route,token=self.open_chat()
+        call=self.client.post(route+'/call',data={'csrf_token':token}).location
+        self.assertEqual(self.client.post(call+'/signals',data={'csrf_token':token,'kind':'candidate','payload':'[]'}).status_code,400)
+        self.assertEqual(self.client.post(call+'/signals',data={'kind':'hangup'}).status_code,400)
+        with closing(db.get_db_connection()) as conn,conn,conn.cursor() as cursor:
+            cursor.execute("UPDATE video_calls SET expires_at=CURRENT_TIMESTAMP-interval '1 minute'")
+        self.assertEqual(self.client.get(call).status_code,410)
 
     def test_workspace_qr_and_roles(self):
         self.assertEqual(self.client.get('/workspace').status_code,302)

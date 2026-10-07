@@ -28,7 +28,7 @@
       </nav>
     </div>
   </header>
-  {% if session.get('user_id') %}<nav class="workspace-nav" aria-label="Особистий кабінет"><a href="{{ url_for('portal.workspace') }}">Мій кабінет</a><a href="{{ url_for('portal.profile') }}">Мій профіль</a>{% if session.get('user_role') == 'user' %}<a href="{{ url_for('portal.documents',patient_id=session.user_id) }}">Мої документи</a>{% endif %}<button type="button" class="button secondary small" data-qr-src="{{ url_for('portal.workspace_qr') }}" data-qr-title="Кабінет на телефоні чи комп’ютері">QR кабінету</button></nav>{% endif %}
+  {% if session.get('user_id') %}<nav class="workspace-nav" aria-label="Особистий кабінет"><a href="{{ url_for('portal.workspace') }}">Мій кабінет</a><a href="{{ url_for('portal.profile') }}">Мій профіль</a><a href="{{ url_for('communications.inbox') }}">Повідомлення</a>{% if session.get('user_role') == 'user' %}<a href="{{ url_for('portal.documents',patient_id=session.user_id) }}">Мої документи</a>{% endif %}<button type="button" class="button secondary small" data-qr-src="{{ url_for('portal.workspace_qr') }}" data-qr-title="Кабінет на телефоні чи комп’ютері">QR кабінету</button></nav>{% endif %}
   <main id="content" class="page-shell">
     {% for category, message in get_flashed_messages(with_categories=true) %}
       <div class="notice {{ category }}" role="{{ 'alert' if category == 'error' else 'status' }}"><span>{{ message }}</span><button type="button" data-dismiss-notice aria-label="Закрити повідомлення">×</button></div>

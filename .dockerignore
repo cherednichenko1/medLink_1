@@ -17,3 +17,7 @@ DEPLOY.md
 tests/
 .github/
 PROJECT_NOTES.md
+
+.local-tls/
+
+.backups/

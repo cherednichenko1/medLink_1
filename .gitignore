@@ -39,3 +39,8 @@ k8s/01-secrets.yaml
 
 # Database backups
 *.dump
+
+# Private local HTTPS keys
+.local-tls/
+
+.backups/
