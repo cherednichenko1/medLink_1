@@ -12,3 +12,4 @@ itsdangerous==2.2.0
 Jinja2==3.1.6
 MarkupSafe==3.0.3
 charset-normalizer==3.5.2
+pypdf==6.19.0

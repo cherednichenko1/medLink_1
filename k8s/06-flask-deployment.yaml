@@ -13,10 +13,12 @@ spec:
       labels:
         app: flask-app
     spec:
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
         runAsGroup: 10001
+        fsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -24,7 +26,7 @@ spec:
           # Образ збирається локально і завантажується в Docker-демон minikube
           # (див. DEPLOY.md, крок з `eval $(minikube docker-env)`),
           # тому pull з реєстру не потрібен.
-          image: medlink-app:v1.0.6
+          image: medlink-app:v1.0.7
           imagePullPolicy: Never
           ports:
             - containerPort: 5000
@@ -51,9 +53,13 @@ spec:
             - name: SESSION_COOKIE_SECURE
               value: "false"
           securityContext:
+            readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+          volumeMounts:
+            - name: temporary-files
+              mountPath: /tmp
           startupProbe:
             httpGet:
               path: /livez
@@ -78,4 +84,8 @@ spec:
               memory: 128Mi
             limits:
               cpu: 500m
-              memory: 384Mi
+              memory: 768Mi
+      volumes:
+        - name: temporary-files
+          emptyDir:
+            sizeLimit: 64Mi

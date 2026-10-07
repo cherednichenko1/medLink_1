@@ -10,6 +10,8 @@ from security import LOCAL_TZ, can_access_patient, parse_slot, valid_email
 
 class SecurityTests(unittest.TestCase):
     def setUp(self):
+        # These unit cases isolate route authorization with synthetic identities.
+        auth=patch('app.validate_authentication'); auth.start(); self.addCleanup(auth.stop)
         app.config['TESTING'] = True
         self.client = app.test_client()
 
@@ -32,7 +34,7 @@ class SecurityTests(unittest.TestCase):
         cookie = response.headers['Set-Cookie']
         self.assertIn('HttpOnly', cookie)
         self.assertIn('SameSite=Lax', cookie)
-        self.assertIn('medlink_session_v2=', cookie)
+        self.assertIn('medlink_session_v3=', cookie)
 
     def test_request_size_is_bounded(self):
         self.assertEqual(self.client.post('/getLogin', data={'large': 'x' * 70000}).status_code, 413)

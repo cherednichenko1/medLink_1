@@ -7,7 +7,7 @@ import io
 import qrcode
 from qrcode.image.svg import SvgPathImage
 from db import get_db
-from security import now_local,require_role
+from security import positive_id, bounded_cursor, now_local,require_role
 
 bp=Blueprint('communications',__name__)
 
@@ -87,8 +87,7 @@ def conversation(thread_id):
             attachment=request.form.get('attachment_id','')
             if len(text)>4000 or (not text and not attachment): abort(400)
             if attachment:
-                try: attachment=int(attachment)
-                except ValueError: abort(400)
+                attachment=positive_id(attachment)
                 c.execute('SELECT id FROM patient_documents WHERE id=%s AND patient_id=%s AND content IS NOT NULL',(attachment,patient))
                 if not c.fetchone(): abort(400,description='Документ недоступний у цій картці.')
             else: attachment=None
@@ -107,8 +106,7 @@ def conversation(thread_id):
 
 @bp.route('/messages/<int:thread_id>/updates')
 def updates(thread_id):
-    try: after=max(0,int(request.args.get('after','0')))
-    except ValueError: abort(400)
+    after=bounded_cursor(request.args.get('after','0'))
     with get_db().cursor() as c:
         thread(c,thread_id)
         c.execute('''SELECT m.id,m.sender_role,m.body,m.created_at,m.attachment_id,d.title,d.content IS NOT NULL
@@ -182,15 +180,24 @@ def signals(call_id):
             except (ValueError,TypeError): abort(400)
             if not isinstance(payload,dict): abort(400)
             if kind in ('offer','answer') and (payload.get('type')!=kind or not isinstance(payload.get('sdp'),str) or len(payload['sdp'])>20000): abort(400)
-            if kind=='candidate' and (not isinstance(payload.get('candidate'),str) or len(payload['candidate'])>2000): abort(400)
+            if kind=='candidate':
+                if not isinstance(payload.get('candidate'),str) or len(payload['candidate'])>2000: abort(400)
+                mid=payload.get('sdpMid'); index=payload.get('sdpMLineIndex')
+                if mid is not None and (not isinstance(mid,str) or len(mid)>128): abort(400)
+                if index is not None and (type(index) is not int or not 0<=index<=65535): abort(400)
+            if kind in ('offer','answer'):
+                c.execute('SELECT EXISTS(SELECT 1 FROM call_signals WHERE call_id=%s AND kind=%s)',(str(call_id),kind))
+                if c.fetchone()[0]: abort(409)
+                if kind=='answer':
+                    c.execute("SELECT EXISTS(SELECT 1 FROM call_signals WHERE call_id=%s AND kind='offer')",(str(call_id),))
+                    if not c.fetchone()[0]: abort(409)
             c.execute('SELECT COUNT(*) FROM call_signals WHERE call_id=%s AND sender_role=%s',(str(call_id),role))
             if c.fetchone()[0]>=300 and kind!='hangup': abort(429)
             c.execute('INSERT INTO call_signals(call_id,sender_role,kind,payload) VALUES(%s,%s,%s,%s)',(str(call_id),role,kind,json.dumps(payload)))
             if kind=='hangup': c.execute('UPDATE video_calls SET ended_at=CURRENT_TIMESTAMP WHERE id=%s',(str(call_id),))
             conn.commit()
             return jsonify(ok=True)
-        try: after=max(0,int(request.args.get('after','0')))
-        except ValueError: abort(400)
+        after=bounded_cursor(request.args.get('after','0'))
         c.execute('SELECT id,kind,payload FROM call_signals WHERE call_id=%s AND sender_role<>%s AND id>%s ORDER BY id LIMIT 100',(str(call_id),role,after))
         result=[dict(id=r[0],kind=r[1],payload=json.loads(r[2])) for r in c.fetchall()]
     return jsonify(signals=result,ended=bool(row[3]))

@@ -12,13 +12,15 @@ DB_CONFIG = {
     'port': os.environ.get('DB_PORT', '5432'),
     'dbname': os.environ.get('DB_NAME', 'medlink'),
     'user': os.environ.get('DB_USER', 'medlink'),
-    'password': os.environ.get('DB_PASSWORD', 'medlink'),
+    'password': os.environ.get('DB_PASSWORD'),
     'connect_timeout': 5,
     'options': '-c statement_timeout=15000',
 }
 
 
 def get_db_connection():
+    if not DB_CONFIG.get('dsn') and not DB_CONFIG.get('password'):
+        raise RuntimeError('Задайте DB_PASSWORD; стандартний пароль заборонено.')
     return psycopg2.connect(**DB_CONFIG)
 
 
@@ -60,6 +62,7 @@ def init_db():
             migrate_portal(cursor)
             migrate_communications(cursor)
             migrate_avatars(cursor)
+            migrate_security(cursor)
             return
         cursor.execute('''CREATE TABLE IF NOT EXISTS district (
             id SERIAL PRIMARY KEY, name TEXT NOT NULL)''')
@@ -127,6 +130,7 @@ def init_db():
         migrate_portal(cursor)
         migrate_communications(cursor)
         migrate_avatars(cursor)
+        migrate_security(cursor)
     print('MedLink: міграцію БД завершено.')
 
 
@@ -188,6 +192,24 @@ def migrate_avatars(cursor):
     cursor.execute('ALTER TABLE "user" ADD COLUMN avatar BYTEA')
     cursor.execute('ALTER TABLE doctor ADD COLUMN avatar BYTEA')
     cursor.execute('INSERT INTO schema_migrations(version) VALUES(5)')
+
+
+def migrate_security(cursor):
+    cursor.execute('SELECT version FROM schema_migrations WHERE version=6')
+    if cursor.fetchone(): return
+    # All physicians require explicit administrative verification, including existing accounts.
+    cursor.execute('ALTER TABLE patient_documents ADD COLUMN safety_version SMALLINT NOT NULL DEFAULT 0 CHECK(safety_version IN (-1,0,1))')
+    cursor.execute('ALTER TABLE doctor ADD COLUMN verified BOOLEAN NOT NULL DEFAULT FALSE')
+    cursor.execute("CREATE TABLE auth_sessions(token_hash TEXT PRIMARY KEY,role TEXT NOT NULL CHECK(role IN ('user','doctor')),account_id INTEGER NOT NULL,expires_at TIMESTAMPTZ NOT NULL)")
+    cursor.execute('CREATE INDEX sessions_expiry_idx ON auth_sessions(expires_at)')
+    cursor.execute("CREATE TABLE qr_grants(nonce_hash TEXT PRIMARY KEY,session_hash TEXT NOT NULL REFERENCES auth_sessions(token_hash) ON DELETE CASCADE,expires_at TIMESTAMPTZ NOT NULL)")
+    cursor.execute('CREATE INDEX grants_expiry_idx ON qr_grants(expires_at)')
+    cursor.execute('CREATE INDEX grants_session_idx ON qr_grants(session_hash)')
+    cursor.execute("CREATE TABLE action_limits(key TEXT PRIMARY KEY,used INTEGER NOT NULL,window_start TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)")
+    cursor.execute('CREATE INDEX action_limits_expiry_idx ON action_limits(window_start)')
+    cursor.execute('CREATE INDEX login_attempts_expiry_idx ON login_attempts(window_start)')
+    cursor.execute('CREATE INDEX video_calls_expiry_idx ON video_calls(expires_at)')
+    cursor.execute('INSERT INTO schema_migrations(version) VALUES(6)')
 
 
 if __name__ == '__main__':

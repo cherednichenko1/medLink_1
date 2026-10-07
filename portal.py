@@ -8,6 +8,8 @@ from qrcode.image.svg import SvgPathImage
 from PIL import Image, ImageOps, UnidentifiedImageError
 from flask import Blueprint, abort, flash, redirect, render_template, request, session, url_for, send_file
 from werkzeug.utils import secure_filename
+from werkzeug.datastructures import FileStorage
+from werkzeug.exceptions import BadRequest
 from db import get_db
 from security import require_role, require_patient_access, now_local, parse_slot
 
@@ -74,7 +76,7 @@ def reschedule(appointment_id):
         found=cursor.fetchone()
         if not found: abort(404)
         doctor_id=found[0]
-        cursor.execute('SELECT id,full_name FROM doctor WHERE id=%s FOR UPDATE',(doctor_id,))
+        cursor.execute('SELECT id,full_name FROM doctor WHERE id=%s AND verified FOR UPDATE',(doctor_id,))
         doctor=cursor.fetchone()
         cursor.execute('SELECT appointment_date,appointment_time,status FROM appointments WHERE id=%s AND user_id=%s FOR UPDATE',(appointment_id,session['user_id']))
         visit=cursor.fetchone()
@@ -104,6 +106,8 @@ def validated_file(file):
     content=file.read(MAX_FILE+1)
     if not content or len(content)>MAX_FILE: abort(400,description='Файл має бути непорожнім і не більшим за 5 МБ.')
     if content.startswith(b'%PDF-') and b'%%EOF' in content[-1024:]:
+        from pdf_safety import sanitize_pdf
+        content=sanitize_pdf(content)
         kind='application/pdf'; extension='.pdf'
     else:
         try:
@@ -111,9 +115,14 @@ def validated_file(file):
                 warnings.simplefilter('error',Image.DecompressionBombWarning)
                 with Image.open(io.BytesIO(content)) as img:
                     if img.format not in ('JPEG','PNG') or img.width*img.height>20_000_000: raise ValueError
-                    img.verify()
-                    kind='image/jpeg' if img.format=='JPEG' else 'image/png'
-                    extension='.jpg' if img.format=='JPEG' else '.png'
+                    img.load()
+                    clean=ImageOps.exif_transpose(img).convert('RGB')
+                    output=io.BytesIO()
+                    clean.save(output,format='JPEG',quality=92)
+                    content=output.getvalue()
+                    if len(content)>MAX_FILE: abort(400,description='Фото після обробки перевищує 5 МБ.')
+                    kind='image/jpeg'
+                    extension='.jpg'
         except (UnidentifiedImageError,ValueError,OSError,Image.DecompressionBombError,Image.DecompressionBombWarning):
             abort(400,description='Дозволені лише коректні JPEG, PNG та PDF.')
     name=secure_filename(file.filename.rsplit('.',1)[0])[:100] or 'medical-document'
@@ -136,8 +145,8 @@ def documents(patient_id):
             cursor.execute('SELECT COALESCE(SUM(size_bytes),0),COUNT(*) FROM patient_documents WHERE patient_id=%s AND content IS NOT NULL',(patient_id,))
             used,count=cursor.fetchone()
             if used+len(content)>MAX_STORAGE or count>=20: abort(400,description='Ліміт картки: 20 файлів і 20 МБ. Видаліть зайві власні файли.')
-            cursor.execute('''INSERT INTO patient_documents(patient_id,uploader_role,uploader_id,title,filename,mime_type,size_bytes,content)
-                VALUES(%s,%s,%s,%s,%s,%s,%s,%s)''',(patient_id,session['user_role'],session['user_id'],title,name,kind,len(content),psycopg2.Binary(content)))
+            cursor.execute('''INSERT INTO patient_documents(patient_id,uploader_role,uploader_id,title,filename,mime_type,size_bytes,content,safety_version)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,1)''',(patient_id,session['user_role'],session['user_id'],title,name,kind,len(content),psycopg2.Binary(content)))
             conn.commit()
             flash('Документ додано до картки пацієнта.','success')
             return redirect(url_for('portal.documents',patient_id=patient_id),code=303)
@@ -156,9 +165,22 @@ def download(document_id):
         row=cursor.fetchone()
         if not row: abort(404)
         require_patient_access(cursor,row[0])
-        cursor.execute('SELECT content FROM patient_documents WHERE id=%s AND content IS NOT NULL',(document_id,))
+        cursor.execute('SELECT content,safety_version FROM patient_documents WHERE id=%s AND content IS NOT NULL FOR UPDATE',(document_id,))
         content=cursor.fetchone()
         if not content: abort(404)
+        if content[1] == -1:
+            abort(400,description='Документ заблоковано перевіркою безпеки. Завантажте звичайний PDF або фото.')
+        if content[1] == 0:
+            try:
+                name,kind,clean=validated_file(FileStorage(stream=io.BytesIO(bytes(content[0])),filename=row[1]))
+            except BadRequest:
+                cursor.execute('UPDATE patient_documents SET safety_version=-1 WHERE id=%s',(document_id,))
+                get_db().commit()
+                abort(400,description='Документ заблоковано перевіркою безпеки. Оригінал збережено для перевірки адміністратором.')
+            cursor.execute('UPDATE patient_documents SET filename=%s,mime_type=%s,content=%s,size_bytes=%s,safety_version=1 WHERE id=%s',
+                           (name,kind,psycopg2.Binary(clean),len(clean),document_id))
+            get_db().commit()
+            row=(row[0],name,kind); content=(clean,1)
     if request.endpoint == 'portal.preview':
         if row[2] not in ('image/jpeg','image/png'): abort(400)
         with Image.open(io.BytesIO(bytes(content[0]))) as image:

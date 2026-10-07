@@ -5,7 +5,7 @@ import os
 import secrets
 from datetime import datetime, timedelta
 from pathlib import Path
-from xml.sax.saxutils import escape
+from html import escape
 from urllib.parse import urlsplit
 
 import psycopg2
@@ -26,7 +26,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from db import close_db, get_db, init_db
 from security import (can_access_patient, csrf_token, login_keys, now_local, parse_slot,
                       positive_id, protect_csrf, require_patient_access, require_role,
-                      reserve_login_attempt, valid_email)
+                      reserve_login_attempt, valid_email, issue_session, revoke_session, validate_authentication, token_hash)
 
 app = Flask(__name__)
 secret = os.environ.get('FLASK_SECRET_KEY', '')
@@ -34,7 +34,10 @@ if len(secret) < 32 or secret in {'local_dev_secret_change_me', 'your_super_secr
     raise RuntimeError('Задайте FLASK_SECRET_KEY: випадковий секрет щонайменше 32 символи.')
 app.config.update(
     SECRET_KEY=secret,
-    SESSION_COOKIE_NAME='medlink_session_v2',
+    SESSION_COOKIE_NAME='medlink_session_v3',
+    SESSION_REFRESH_EACH_REQUEST=False,
+    MAX_FORM_PARTS=50,
+    MAX_FORM_MEMORY_SIZE=128 * 1024,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
     SESSION_COOKIE_SECURE=os.environ.get('SESSION_COOKIE_SECURE', 'false').lower() == 'true',
@@ -59,12 +62,33 @@ def upload_request_limit():
         request.max_content_length = 6 * 1024 * 1024
 app.teardown_appcontext(close_db)
 app.before_request(protect_csrf)
+
+@app.before_request
+def authenticate_request():
+    if request.endpoint and request.endpoint not in ('static', 'livez', 'healthz'):
+        validate_authentication()
+    for value in (request.view_args or {}).values():
+        if type(value) is int and not 1 <= value <= 2_147_483_647:
+            abort(400)
 app.jinja_env.globals['csrf_token'] = csrf_token
 app.jinja_env.filters['strftime'] = lambda dt, fmt: now_local().strftime(fmt) if dt == 'now' else dt.strftime(fmt)
 PUBLIC_BASE_URL = os.environ.get('PUBLIC_BASE_URL', 'http://localhost:8080').rstrip('/')
 parsed_public_url = urlsplit(PUBLIC_BASE_URL)
-if parsed_public_url.scheme not in {'http', 'https'} or not parsed_public_url.netloc or parsed_public_url.query or parsed_public_url.fragment or parsed_public_url.username:
+if parsed_public_url.scheme not in {'http', 'https'} or not parsed_public_url.netloc or parsed_public_url.query or parsed_public_url.fragment or parsed_public_url.username is not None or parsed_public_url.password is not None or not parsed_public_url.hostname or parsed_public_url.path:
     raise RuntimeError('PUBLIC_BASE_URL має бути адресою http(s) без облікових даних, query або fragment.')
+MEDLINK_ENV = os.environ.get('MEDLINK_ENV', 'local')
+if MEDLINK_ENV not in ('local', 'production'):
+    raise RuntimeError('MEDLINK_ENV має бути local або production.')
+if MEDLINK_ENV == 'production' and (parsed_public_url.scheme != 'https' or not app.config['SESSION_COOKIE_SECURE']):
+    raise RuntimeError('Production потребує HTTPS PUBLIC_BASE_URL і SESSION_COOKIE_SECURE=true.')
+
+@app.before_request
+def enforce_production_transport():
+    if MEDLINK_ENV == 'production' and not request.is_secure and request.endpoint not in ('livez','healthz'):
+        if request.method in ('GET','HEAD'):
+            return redirect(PUBLIC_BASE_URL + request.path, code=302)
+        abort(400, description='Ця дія потребує захищеного HTTPS-з’єднання.')
+
 app.jinja_env.globals['qr_base_host'] = parsed_public_url.hostname
 PASSWORD_METHOD = 'pbkdf2:sha256:1000000'
 # Equivalent work for unknown accounts to reduce account enumeration by timing.
@@ -75,6 +99,7 @@ DUMMY_HASH = generate_password_hash(secrets.token_urlsafe(32), method=PASSWORD_M
 def security_headers(response):
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Permissions-Policy'] = 'camera=(self), microphone=(self), geolocation=(), payment=()'
     response.headers['Referrer-Policy'] = 'no-referrer' if request.endpoint == 'shared_page' else 'same-origin'
     response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
     if request.endpoint != 'static':
@@ -100,7 +125,7 @@ def database_error(error):
 @app.errorhandler(429)
 def http_error(error):
     messages = {404: 'Сторінку не знайдено.', 405: 'Ця дія потребує іншого методу запиту.',
-                413: 'Надіслано забагато даних.', 429: 'Забагато спроб. Спробуйте через 15 хвилин.'}
+                413: 'Надіслано забагато даних.', 429: 'Забагато спроб. Зачекайте перед повторною дією.'}
     return render_template('error.html', code=error.code,
                            message=messages.get(error.code, error.description)), error.code
 
@@ -164,7 +189,7 @@ def registerPage():
             experience = int(request.form.get('experience', ''))
             hospital_id = int(request.form.get('hospital', ''))
             specialization_id = int(request.form.get('specialization', ''))
-            if not 0 <= experience <= 80 or min(hospital_id, specialization_id) <= 0:
+            if not 0 <= experience <= 80 or not (1 <= hospital_id <= 2147483647 and 1 <= specialization_id <= 2147483647):
                 raise ValueError
         except (ValueError, TypeError):
             return registration_form('Перевірте досвід, лікарню та спеціалізацію.', 400)
@@ -191,7 +216,7 @@ def registerPage():
     except psycopg2.IntegrityError:
         conn.rollback()
         return registration_form('Не вдалося зареєструватися. Перевірте дані або зверніться до адміністратора.', 400)
-    flash('Обліковий запис створено. Тепер увійдіть.', 'success')
+    flash('Реєстрацію лікаря прийнято. Вхід стане доступним після перевірки адміністратором.' if role == 'doctor' else 'Обліковий запис створено. Тепер увійдіть.', 'success')
     return redirect(url_for('doctor_login' if role == 'doctor' else 'loginPage'), code=303)
 
 
@@ -213,7 +238,7 @@ def get_login():
         abort(429)
     with conn.cursor() as cursor:
         if role == 'doctor':
-            cursor.execute('''SELECT id, full_name, password FROM doctor
+            cursor.execute('''SELECT id, full_name, password, verified FROM doctor
                 WHERE lower(email) = %s OR rnokpp = %s ORDER BY id LIMIT 1''', (login, login))
         else:
             cursor.execute('SELECT id, name, password FROM "user" WHERE lower(email) = %s', (login,))
@@ -222,9 +247,16 @@ def get_login():
     if not row or not valid:
         flash('Невірний логін або пароль.', 'error')
         return redirect(url_for('doctor_login' if role == 'doctor' else 'loginPage', next=destination), code=303)
+    if role == 'doctor' and not row[3]:
+        flash('Обліковий запис лікаря очікує перевірки адміністратором.', 'error')
+        return redirect(url_for('doctor_login'), code=303)
+    with conn.cursor() as cursor:
+        revoke_session(cursor)
+        sid = issue_session(cursor, role, row[0])
+    conn.commit()
     session.clear()
     session.permanent = True
-    session.update(user_role=role, user_id=row[0])
+    session.update(user_role=role, user_id=row[0], _sid=sid)
     csrf_token()
     flash('Вхід виконано.', 'success')
     return redirect(destination or url_for('doctor_cabinet' if role == 'doctor' else 'user_cabinet'), code=303)
@@ -250,7 +282,7 @@ def searchPage():
         query = '''SELECT d.id, d.full_name, d.phone, d.experience, h.name, h.type,
             district.name, h.address, h.edrpou, s.name, d.email FROM doctor d
             JOIN hospital h ON d.hospital_id = h.id JOIN district ON h.district_id = district.id
-            JOIN specialization s ON d.specialization_id = s.id WHERE TRUE'''
+            JOIN specialization s ON d.specialization_id = s.id WHERE d.verified'''
         params = []
         experience = request.args.get('experience', '')
         if experience:
@@ -302,7 +334,7 @@ def book_appointment():
     conn = get_db()
     try:
         with conn.cursor() as cursor:
-            cursor.execute('SELECT id FROM doctor WHERE id = %s FOR UPDATE', (doctor_id,))
+            cursor.execute('SELECT id FROM doctor WHERE id = %s AND verified FOR UPDATE', (doctor_id,))
             if not cursor.fetchone():
                 abort(404)
             cursor.execute('''SELECT starts_at, ends_at FROM doctor_working_hours
@@ -417,7 +449,7 @@ def user_cabinet():
 @app.route('/doctor_info/<email>')
 def doctor_info(email):
     with get_db().cursor() as cursor:
-        cursor.execute('SELECT id FROM doctor WHERE lower(email) = %s', (email.lower(),))
+        cursor.execute('SELECT id FROM doctor WHERE lower(email) = %s AND verified', (email.lower(),))
         row = cursor.fetchone()
         if not row:
             abort(404)
@@ -486,10 +518,17 @@ def decode_share(token):
         abort(403, description='Посилання недійсне або його 15-хвилинний термін минув. Попросіть новий QR-код.')
     if not isinstance(data, dict) or data.get('v') != 1 or data.get('scope') not in {'profile', 'history'}:
         abort(403)
-    if type(data.get('patient_id')) is not int or data['patient_id'] <= 0:
+    if type(data.get('patient_id')) is not int or not 1 <= data['patient_id'] <= 2_147_483_647:
         abort(403)
-    if data.get('doctor_id') is not None and (type(data['doctor_id']) is not int or data['doctor_id'] <= 0):
+    if data.get('doctor_id') is not None and (type(data['doctor_id']) is not int or not 1 <= data['doctor_id'] <= 2_147_483_647):
         abort(403)
+    nonce = data.get('nonce')
+    if not isinstance(nonce, str) or len(nonce) != 32:
+        abort(403)
+    with get_db().cursor() as cursor:
+        cursor.execute("SELECT EXISTS(SELECT 1 FROM qr_grants q JOIN auth_sessions s ON s.token_hash=q.session_hash WHERE q.nonce_hash=%s AND q.expires_at>CURRENT_TIMESTAMP AND s.expires_at>CURRENT_TIMESTAMP AND (s.role='user' OR EXISTS(SELECT 1 FROM doctor d WHERE d.id=s.account_id AND d.verified)))", (token_hash(nonce),))
+        if not cursor.fetchone()[0]:
+            abort(403, description='QR-доступ відкликано або його термін минув.')
     return data
 
 
@@ -507,8 +546,18 @@ def create_qr_share():
     else:
         patient_records(patient_id)  # authorize issuer, never accept doctor scope from the client
         doctor_id = session['user_id'] if session['user_role'] == 'doctor' else None
+    nonce = secrets.token_urlsafe(24)
+    conn = get_db()
+    with conn.cursor() as cursor:
+        cursor.execute('SELECT token_hash FROM auth_sessions WHERE token_hash=%s FOR UPDATE', (token_hash(session['_sid']),))
+        if not cursor.fetchone(): abort(403)
+        cursor.execute('DELETE FROM qr_grants WHERE expires_at<=CURRENT_TIMESTAMP')
+        cursor.execute('SELECT COUNT(*) FROM qr_grants WHERE session_hash=%s', (token_hash(session['_sid']),))
+        if cursor.fetchone()[0] >= 20: abort(429)
+        cursor.execute("INSERT INTO qr_grants(nonce_hash,session_hash,expires_at) VALUES(%s,%s,CURRENT_TIMESTAMP + INTERVAL '15 minutes')", (token_hash(nonce),token_hash(session['_sid'])))
+    conn.commit()
     token = share_serializer().dumps({'v': 1, 'scope': scope, 'patient_id': patient_id,
-        'doctor_id': doctor_id, 'nonce': secrets.token_urlsafe(12)})
+        'doctor_id': doctor_id, 'nonce': nonce})
     target = public_url('shared_page', token=token)
     # Gateway/Gunicorn logging omits query strings; the template clears the token from history.
     qr = qrcode.make(target, image_factory=SvgPathImage, box_size=7, border=4)
@@ -617,6 +666,11 @@ def download_patient_history_pdf(patient_id):
 
 @app.route('/logout', methods=['POST'])
 def logout():
+    if session.get('_sid'):
+        conn = get_db()
+        with conn.cursor() as cursor:
+            revoke_session(cursor)
+        conn.commit()
     session.clear()
     flash('Ви вийшли з облікового запису.', 'success')
     return redirect(url_for('main'), code=303)
@@ -631,7 +685,7 @@ def livez():
 def healthz():
     try:
         with get_db().cursor() as cursor:
-            cursor.execute('SELECT 1 FROM schema_migrations WHERE version = 5')
+            cursor.execute('SELECT 1 FROM schema_migrations WHERE version = 6')
             if not cursor.fetchone():
                 return {'status': 'unavailable'}, 503
         return {'status': 'ok'}, 200
@@ -656,8 +710,8 @@ def create_doctor(name,email,phone,rnokpp,experience,hospital_id,specialization_
     conn=get_db()
     try:
         with conn.cursor() as cursor:
-            cursor.execute("""INSERT INTO doctor(full_name,email,phone,rnokpp,experience,hospital_id,specialization_id,password)
-                VALUES(%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",(name.strip(),email,phone.strip(),rnokpp,experience,hospital_id,specialization_id,generate_password_hash(password,method=PASSWORD_METHOD)))
+            cursor.execute("""INSERT INTO doctor(full_name,email,phone,rnokpp,experience,hospital_id,specialization_id,password,verified)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,TRUE) RETURNING id""",(name.strip(),email,phone.strip(),rnokpp,experience,hospital_id,specialization_id,generate_password_hash(password,method=PASSWORD_METHOD)))
             id=cursor.fetchone()[0]
             cursor.execute("""INSERT INTO doctor_working_hours(doctor_id,weekday,starts_at,ends_at)
                 SELECT %s,day,'09:00'::time,'17:00'::time FROM generate_series(0,4) day""",(id,))
@@ -666,6 +720,41 @@ def create_doctor(name,email,phone,rnokpp,experience,hospital_id,specialization_
         conn.rollback()
         raise click.ClickException('Конфлікт email/РНОКПП або некоректна лікарня/спеціалізація.') from None
     click.echo('Обліковий запис лікаря створено. Вхід: /doctor/login')
+
+
+@app.route('/qr/shares/revoke', methods=['POST'])
+def revoke_qr_shares():
+    if session.get('user_role') not in ('user', 'doctor'): abort(403)
+    conn = get_db()
+    with conn.cursor() as cursor:
+        cursor.execute('DELETE FROM qr_grants WHERE session_hash=%s', (token_hash(session['_sid']),))
+    conn.commit()
+    flash('Усі QR-доступи цієї сесії відкликано.', 'success')
+    return redirect(url_for('portal.profile'), code=303)
+
+
+@app.cli.command('list-doctors')
+def list_doctors():
+    """Local administrator inventory; this command does not approve accounts."""
+    with get_db().cursor() as cursor:
+        cursor.execute('SELECT id,full_name,email,verified FROM doctor ORDER BY id')
+        for account_id,name,email,verified in cursor.fetchall():
+            click.echo(f'id={account_id} name={name!r} email={email!r} verified={verified}')
+
+
+@app.cli.command('verify-doctor')
+@click.option('--doctor-id', type=click.IntRange(1, 2147483647), required=True)
+@click.option('--revoke', is_flag=True, help='Відкликати підтвердження і доступ.')
+def verify_doctor(doctor_id, revoke):
+    """Run locally after independently checking a physician's credentials."""
+    conn = get_db()
+    with conn.cursor() as cursor:
+        cursor.execute('UPDATE doctor SET verified=%s WHERE id=%s RETURNING id', (not revoke, doctor_id))
+        if not cursor.fetchone(): raise click.ClickException('Лікаря не знайдено.')
+        if revoke:
+            cursor.execute("DELETE FROM auth_sessions WHERE role='doctor' AND account_id=%s", (doctor_id,))
+    conn.commit()
+    click.echo('Доступ відкликано.' if revoke else 'Лікаря підтверджено.')
 
 
 if __name__ == '__main__':

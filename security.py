@@ -32,7 +32,7 @@ def protect_csrf():
 def positive_id(value):
     try:
         number = int(value)
-        if number <= 0:
+        if not 1 <= number <= 2_147_483_647:
             raise ValueError
         return number
     except (ValueError, TypeError):
@@ -93,7 +93,9 @@ def reserve_login_attempt(cursor, keys):
     """Row locks serialize attempts across replicas. Count before checking password."""
     cursor.execute("DELETE FROM login_attempts WHERE window_start < CURRENT_TIMESTAMP - INTERVAL '1 day'")
     allowed = True
-    for key in sorted(keys):
+    # Lock the IP first and stop immediately if exhausted: random account names
+    # cannot grow the rate-limit table after the source IP has been blocked.
+    for key in [keys[-1], *keys[:-1]]:
         cursor.execute('''INSERT INTO login_attempts (key) VALUES (%s)
             ON CONFLICT (key) DO NOTHING''', (key,))
         cursor.execute('SELECT failures, window_start FROM login_attempts WHERE key = %s FOR UPDATE', (key,))
@@ -102,7 +104,84 @@ def reserve_login_attempt(cursor, keys):
             cursor.execute('UPDATE login_attempts SET failures = 0, window_start = CURRENT_TIMESTAMP WHERE key = %s', (key,))
             failures = 0
         if failures >= 10:
-            allowed = False
+            return False
         else:
             cursor.execute('UPDATE login_attempts SET failures = failures + 1 WHERE key = %s', (key,))
     return allowed
+
+
+def bounded_cursor(value):
+    try:
+        if len(str(value)) > 19:
+            raise ValueError
+        number = int(value)
+        if not 0 <= number <= 9_223_372_036_854_775_807:
+            raise ValueError
+        return number
+    except (ValueError, TypeError):
+        abort(400, description='Некоректний параметр пагінації.')
+
+
+def token_hash(token):
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def issue_session(cursor, role, account_id):
+    token = secrets.token_urlsafe(32)
+    cursor.execute("DELETE FROM auth_sessions WHERE expires_at <= CURRENT_TIMESTAMP")
+    cursor.execute("INSERT INTO auth_sessions(token_hash,role,account_id,expires_at) VALUES(%s,%s,%s,CURRENT_TIMESTAMP + INTERVAL '2 hours')",
+                   (token_hash(token), role, account_id))
+    return token
+
+
+def revoke_session(cursor):
+    token = session.get('_sid')
+    if isinstance(token, str):
+        digest = token_hash(token)
+        cursor.execute('DELETE FROM qr_grants WHERE session_hash=%s', (digest,))
+        cursor.execute('DELETE FROM auth_sessions WHERE token_hash=%s', (digest,))
+
+
+def validate_authentication():
+    if not session.get('user_id'):
+        return
+    token = session.get('_sid')
+    role = session.get('user_role')
+    if not isinstance(token, str) or len(token) != 43 or role not in ('user', 'doctor'):
+        session.clear()
+        return
+    from db import get_db
+    with get_db().cursor() as cursor:
+        table = 'doctor' if role == 'doctor' else '"user"'
+        approved = ' AND a.verified' if role == 'doctor' else ''
+        cursor.execute(f"SELECT EXISTS(SELECT 1 FROM auth_sessions s JOIN {table} a ON a.id=s.account_id WHERE s.token_hash=%s AND s.role=%s AND s.account_id=%s AND s.expires_at>CURRENT_TIMESTAMP{approved})",
+                       (token_hash(token), role, session['user_id']))
+        valid = cursor.fetchone()[0]
+    if not valid:
+        session.clear()
+    elif request.method in {'POST', 'PUT', 'PATCH', 'DELETE'}:
+        reserve_action()
+
+
+def reserve_action():
+    """Shared per-account write budget, committed before expensive file processing."""
+    from db import get_db
+    if request.endpoint in ('logout','revoke_qr_shares'):
+        return
+    category = 'signal' if request.endpoint == 'communications.signals' else 'write'
+    limit = 320 if category == 'signal' else 60
+    if request.endpoint in ('portal.documents','portal.upload_avatar','communications.start_call'):
+        category = request.endpoint
+        limit = 10
+    key = hashlib.sha256(f"action:{session['user_role']}:{session['user_id']}:{category}".encode()).hexdigest()
+    conn=get_db()
+    with conn.cursor() as cursor:
+        cursor.execute("DELETE FROM action_limits WHERE window_start<CURRENT_TIMESTAMP-INTERVAL '1 day'")
+        cursor.execute("""INSERT INTO action_limits(key,used) VALUES(%s,1) ON CONFLICT(key) DO UPDATE SET
+            used=CASE WHEN action_limits.window_start<CURRENT_TIMESTAMP-INTERVAL '1 minute' THEN 1 ELSE action_limits.used+1 END,
+            window_start=CASE WHEN action_limits.window_start<CURRENT_TIMESTAMP-INTERVAL '1 minute' THEN CURRENT_TIMESTAMP ELSE action_limits.window_start END
+            RETURNING used""",(key,))
+        used=cursor.fetchone()[0]
+    conn.commit()
+    if used>limit:
+        abort(429, description='Забагато дій. Зачекайте хвилину.')

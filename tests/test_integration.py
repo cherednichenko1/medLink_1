@@ -15,7 +15,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 os.environ.setdefault('FLASK_SECRET_KEY', 'test-only-secret-at-least-thirty-two-characters-long')
 import db
 from app import app, PASSWORD_METHOD
-from security import now_local
+from security import now_local, issue_session
 
 TEST_URL = os.environ.get('TEST_DATABASE_URL')
 
@@ -42,7 +42,7 @@ class DatabaseTests(unittest.TestCase):
 
     def setUp(self):
         with closing(db.get_db_connection()) as conn, conn, conn.cursor() as cursor:
-            cursor.execute('TRUNCATE call_signals, video_calls, messages, conversations, patient_documents, appointments, patient_history, doctor, "user", login_attempts RESTART IDENTITY CASCADE')
+            cursor.execute('TRUNCATE call_signals, video_calls, messages, conversations, patient_documents, appointments, patient_history, doctor, "user", login_attempts, action_limits RESTART IDENTITY CASCADE')
             cursor.execute('''INSERT INTO "user" (name,email,phone,password) VALUES
                 ('Пацієнт','patient@example.com','+380991234567',%s),
                 ('Інший','other@example.com','+380991234568',%s)''', (self.password_hash, self.password_hash))
@@ -55,12 +55,98 @@ class DatabaseTests(unittest.TestCase):
                 ('Інший лікар','otherdoctor@example.com','1234567891','+380991234570',5,%s,%s,%s)''',
                 (hospital, specialization, self.password_hash, hospital, specialization, self.password_hash))
         with closing(db.get_db_connection()) as conn, conn, conn.cursor() as cursor:
+            cursor.execute("UPDATE doctor SET verified=TRUE")
             cursor.execute("INSERT INTO doctor_working_hours(doctor_id,weekday,starts_at,ends_at) SELECT id,day,'09:00'::time,'17:00'::time FROM doctor CROSS JOIN generate_series(0,4) day")
         self.client = app.test_client()
         day = now_local().date() + timedelta(days=1)
         while day.weekday() >= 5:
             day += timedelta(days=1)
         self.day = day.isoformat()
+
+    def test_logout_revokes_copied_session_and_issued_qr(self):
+        token=self.authenticate()
+        response=self.client.post('/qr/share',data={'csrf_token':token,'scope':'profile','patient_id':'1'})
+        target=response.get_json()['url']
+        from urllib.parse import urlsplit
+        target=urlsplit(target).path+'?'+urlsplit(target).query
+        guest=app.test_client()
+        self.assertEqual(guest.get(target).status_code,200)
+        cookie=self.client.get_cookie(app.config['SESSION_COOKIE_NAME']).value
+        self.assertEqual(self.client.post('/logout',data={'csrf_token':token}).status_code,303)
+        stolen=app.test_client(); stolen.set_cookie(app.config['SESSION_COOKIE_NAME'],cookie)
+        self.assertEqual(stolen.get('/user_info/1').status_code,302)
+        self.assertEqual(guest.get(target).status_code,403)
+
+    def test_manual_qr_revocation_keeps_login(self):
+        token=self.authenticate()
+        target=self.client.post('/qr/share',data={'csrf_token':token,'scope':'profile','patient_id':'1'}).get_json()['url']
+        from urllib.parse import urlsplit
+        path=urlsplit(target).path+'?'+urlsplit(target).query
+        self.assertEqual(app.test_client().get(path).status_code,200)
+        self.assertEqual(self.client.post('/qr/shares/revoke',data={'csrf_token':token}).status_code,303)
+        self.assertEqual(app.test_client().get(path).status_code,403)
+        self.assertEqual(self.client.get('/user_info/1').status_code,200)
+
+    def test_sessions_have_absolute_expiry_and_account_binding(self):
+        self.authenticate()
+        with closing(db.get_db_connection()) as conn,conn,conn.cursor() as cursor:
+            cursor.execute("UPDATE auth_sessions SET expires_at=CURRENT_TIMESTAMP-INTERVAL '1 second'")
+        self.assertEqual(self.client.get('/user_info/1').status_code,302)
+        self.authenticate()
+        with self.client.session_transaction() as state: state['user_id']=2
+        self.assertEqual(self.client.get('/user_info/2').status_code,302)
+
+    def test_legacy_cookie_cannot_grant_access(self):
+        with self.client.session_transaction() as state: state.update(user_role='doctor',user_id=1)
+        self.assertEqual(self.client.get('/doctorCabinet').status_code,302)
+
+    def test_doctor_revocation_blocks_live_session_and_shares(self):
+        self.book()
+        token=self.authenticate(role='doctor')
+        target=self.client.post('/qr/share',data={'csrf_token':token,'scope':'history','patient_id':'1'}).get_json()['url']
+        result=app.test_cli_runner().invoke(args=['verify-doctor','--doctor-id','1','--revoke'])
+        self.assertEqual(result.exit_code,0,result.output)
+        self.assertEqual(self.client.get('/doctorCabinet').status_code,302)
+        from urllib.parse import urlsplit
+        self.assertEqual(app.test_client().get(urlsplit(target).path+'?'+urlsplit(target).query).status_code,403)
+
+    def test_unverified_doctor_cannot_receive_bookings(self):
+        with closing(db.get_db_connection()) as conn,conn,conn.cursor() as cursor:
+            cursor.execute('UPDATE doctor SET verified=FALSE WHERE id=1')
+        token=self.authenticate()
+        response=self.client.post('/searchPage',data={'csrf_token':token,'doctor_id':'1','appointment_date':self.day,'appointment_time':'09:00'})
+        self.assertEqual(response.status_code,404)
+        self.assertNotIn(b'/doctor_info/doctor@example.com',self.client.get('/searchPage').data)
+
+    def test_large_ids_and_pagination_return_400(self):
+        self.authenticate()
+        self.assertEqual(self.client.get('/user_info/999999999999999999999999').status_code,400)
+        self.assertEqual(self.client.get('/messages/1/updates?after=99999999999999999999999').status_code,400)
+        self.assertEqual(self.client.get('/messages/1/updates?after=-1').status_code,400)
+
+    def test_expensive_uploads_are_rate_limited_per_account(self):
+        token=self.authenticate()
+        for _ in range(10):
+            self.assertEqual(self.client.post('/profile/avatar',data={'csrf_token':token}).status_code,400)
+        self.assertEqual(self.client.post('/profile/avatar',data={'csrf_token':token}).status_code,429)
+
+    def test_legacy_unsafe_pdf_is_quarantined_without_deletion(self):
+        token=self.authenticate()
+        content=b'%PDF-1.7 fake %%EOF'
+        with closing(db.get_db_connection()) as conn,conn,conn.cursor() as cursor:
+            cursor.execute("INSERT INTO patient_documents(patient_id,uploader_role,uploader_id,title,filename,mime_type,size_bytes,content) VALUES(1,'user',1,'Legacy','legacy.pdf','application/pdf',%s,%s) RETURNING id",(len(content),db.psycopg2.Binary(content)))
+            document=cursor.fetchone()[0]
+        self.assertEqual(self.client.get(f'/documents/{document}/download').status_code,400)
+        with closing(db.get_db_connection()) as conn,conn.cursor() as cursor:
+            cursor.execute('SELECT safety_version,content FROM patient_documents WHERE id=%s',(document,)); row=cursor.fetchone()
+            self.assertEqual(row[0],-1); self.assertEqual(bytes(row[1]),content)
+        self.assertEqual(self.client.get(f'/documents/{document}/download').status_code,400)
+
+    def test_qr_active_grants_are_bounded(self):
+        token=self.authenticate()
+        for _ in range(20):
+            self.assertEqual(self.client.post('/qr/share',data={'csrf_token':token,'scope':'profile','patient_id':'1'}).status_code,200)
+        self.assertEqual(self.client.post('/qr/share',data={'csrf_token':token,'scope':'profile','patient_id':'1'}).status_code,429)
 
     def csrf(self, client=None):
         client = client or self.client
@@ -72,7 +158,9 @@ class DatabaseTests(unittest.TestCase):
         client = client or self.client
         token = self.csrf(client)
         with client.session_transaction() as session:
-            session.update(user_role=role, user_id=account_id)
+            with closing(db.get_db_connection()) as conn, conn, conn.cursor() as cursor:
+                sid=issue_session(cursor, role, account_id)
+            session.update(user_role=role, user_id=account_id, _sid=sid)
         return token
 
     def book(self, client=None, account_id=1):
@@ -242,7 +330,9 @@ class DatabaseTests(unittest.TestCase):
             cursor.execute('SELECT id FROM patient_documents'); document=cursor.fetchone()[0]
         download=f'/documents/{document}/download'
         response=self.client.get(download)
-        self.assertEqual(response.data,content)
+        self.assertTrue(response.data.startswith(b'\xff\xd8'))
+        self.assertEqual(response.mimetype,'image/jpeg')
+        self.assertNotEqual(response.data,content)
         self.assertIn('attachment',response.headers['Content-Disposition'])
         self.assertGreater(len(content),64*1024)
         preview=self.client.get(f'/documents/{document}/preview')
@@ -288,6 +378,12 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(cursor.fetchone()[0],5)
         response = self.client.post('/getLogin', data={'csrf_token': token,'role':'doctor',
             'enterLogin':'newdoctor@example.com','enterPassword':self.password})
+        self.assertEqual(response.status_code,303)
+        with self.client.session_transaction() as session:
+            self.assertNotIn('user_role',session)
+        result=app.test_cli_runner().invoke(args=['verify-doctor','--doctor-id',str(doctor_id)])
+        self.assertEqual(result.exit_code,0,result.output)
+        response=self.client.post('/getLogin',data={'csrf_token':token,'role':'doctor','enterLogin':'newdoctor@example.com','enterPassword':self.password})
         self.assertEqual(response.status_code,303)
         with self.client.session_transaction() as session:
             self.assertEqual(session['user_role'],'doctor')

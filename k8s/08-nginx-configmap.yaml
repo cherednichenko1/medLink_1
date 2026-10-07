@@ -6,18 +6,24 @@ metadata:
 data:
   default.conf: |
     log_format medlink_safe '$remote_addr [$time_local] "$request_method $uri" $status $body_bytes_sent';
+    limit_req_zone $binary_remote_addr zone=medlink_requests:10m rate=20r/s;
     server {
         listen 80;
         access_log /var/log/nginx/access.log medlink_safe;
         server_name _;
 
         client_max_body_size 10M;
+        server_tokens off;
+        client_body_timeout 15s;
+        client_header_timeout 15s;
+        limit_req zone=medlink_requests burst=60 nodelay;
+        limit_req_status 429;
 
         location / {
             proxy_pass http://flask-service:5000;
             proxy_set_header Host $host;
             proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-For $remote_addr;
             proxy_set_header X-Forwarded-Proto $scheme;
             proxy_read_timeout 60s;
         }
