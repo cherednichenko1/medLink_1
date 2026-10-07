@@ -1,0 +1,21 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: medlink
+  namespace: argocd
+
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/cherednichenko1/medLink_1.git
+    targetRevision: main
+    path: k8s
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: medlink
+
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
