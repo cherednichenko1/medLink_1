@@ -44,3 +44,5 @@ k8s/01-secrets.yaml
 .local-tls/
 
 .backups/
+
+.local-service/

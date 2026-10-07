@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import psycopg2
 import qrcode
 from qrcode.image.svg import SvgPathImage
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 from flask import Blueprint, abort, flash, redirect, render_template, request, session, url_for, send_file
 from werkzeug.utils import secure_filename
 from db import get_db
@@ -184,3 +184,54 @@ def delete_document(document_id):
         conn.commit()
     flash('Файл видалено.','success')
     return redirect(url_for('portal.documents',patient_id=row[0]),code=303)
+
+
+@bp.route('/profile/avatar',methods=['POST'])
+def upload_avatar():
+    if not signed_in(): abort(403)
+    file=request.files.get('avatar')
+    if not file: abort(400,description='Оберіть фото JPEG або PNG.')
+    data=file.read(2*1024*1024+1)
+    if not data or len(data)>2*1024*1024: abort(400,description='Фото має бути до 2 МБ.')
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter('error',Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(data)) as image:
+                if image.format not in ('JPEG','PNG') or image.width*image.height>20_000_000: raise ValueError
+                image=ImageOps.exif_transpose(image)
+                image=ImageOps.fit(image.convert('RGB'),(256,256))
+                output=io.BytesIO();image.save(output,format='JPEG',quality=85)
+    except (ValueError,OSError,UnidentifiedImageError,Image.DecompressionBombError,Image.DecompressionBombWarning):
+        abort(400,description='Потрібне коректне фото JPEG або PNG.')
+    conn=get_db()
+    with conn.cursor() as c:
+        if session['user_role']=='doctor':c.execute('UPDATE doctor SET avatar=%s WHERE id=%s RETURNING id',(psycopg2.Binary(output.getvalue()),session['user_id']))
+        else:c.execute('UPDATE "user" SET avatar=%s WHERE id=%s RETURNING id',(psycopg2.Binary(output.getvalue()),session['user_id']))
+        if not c.fetchone():abort(404)
+    conn.commit();flash('Аватар оновлено.','success')
+    return redirect(url_for('portal.profile'),code=303)
+
+
+@bp.route('/profile/avatar/delete',methods=['POST'])
+def delete_avatar():
+    if not signed_in():abort(403)
+    conn=get_db()
+    with conn.cursor() as c:
+        if session['user_role']=='doctor':c.execute('UPDATE doctor SET avatar=NULL WHERE id=%s',(session['user_id'],))
+        else:c.execute('UPDATE "user" SET avatar=NULL WHERE id=%s',(session['user_id'],))
+    conn.commit();flash('Аватар видалено.','success')
+    return redirect(url_for('portal.profile'),code=303)
+
+
+@bp.route('/avatars/<role>/<int:account_id>')
+def avatar(role,account_id):
+    if role not in ('user','doctor'):abort(404)
+    with get_db().cursor() as c:
+        if role=='user':require_patient_access(c,account_id)
+        if role=='doctor':c.execute('SELECT avatar FROM doctor WHERE id=%s',(account_id,))
+        else:c.execute('SELECT avatar FROM "user" WHERE id=%s',(account_id,))
+        row=c.fetchone()
+        if not row:abort(404)
+    if row[0]:return send_file(io.BytesIO(bytes(row[0])),mimetype='image/jpeg',max_age=0)
+    from flask import current_app
+    return current_app.send_static_file('doctor_placeholder.png' if role=='doctor' else 'user_placeholder.png')

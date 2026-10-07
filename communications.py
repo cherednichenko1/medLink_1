@@ -35,18 +35,29 @@ def thread(cursor,thread_id,lock=False):
     return row
 
 
+def contact_rows(c):
+    role,account=identity()
+    owner='u.id' if role=='user' else 'd.id'
+    c.execute(f'''SELECT u.id,u.name,d.id,d.full_name FROM "user" u CROSS JOIN doctor d
+        WHERE {owner}=%s AND (EXISTS(SELECT 1 FROM appointments a WHERE a.user_id=u.id AND a.doctor_id=d.id
+            AND a.status IN ('scheduled','in_progress','completed'))
+        OR EXISTS(SELECT 1 FROM patient_history h WHERE h.patient_id=u.id AND h.doctor_id=d.id))
+        ORDER BY d.full_name,u.name''',(account,))
+    return c.fetchall()
+
+
+@bp.route('/messages/contacts')
+def contacts():
+    role,account=identity()
+    with get_db().cursor() as c: rows=contact_rows(c)
+    return jsonify(contacts=[dict(id=r[2] if role=='user' else r[0],name=r[3] if role=='user' else r[1],patient_id=r[0]) for r in rows])
+
+
 @bp.route('/messages')
 def inbox():
     if not session.get('user_id'): return redirect(url_for('loginPage',next='/messages'))
-    role,account=identity()
     with get_db().cursor() as c:
-        owner='u.id' if role=='user' else 'd.id'
-        c.execute(f'''SELECT u.id,u.name,d.id,d.full_name FROM "user" u CROSS JOIN doctor d
-            WHERE {owner}=%s AND (EXISTS(SELECT 1 FROM appointments a WHERE a.user_id=u.id AND a.doctor_id=d.id
-                AND a.status IN ('scheduled','in_progress','completed'))
-            OR EXISTS(SELECT 1 FROM patient_history h WHERE h.patient_id=u.id AND h.doctor_id=d.id))
-            ORDER BY d.full_name,u.name''',(account,))
-        partners=c.fetchall()
+        partners=contact_rows(c)
     return render_template('inbox.html',partners=partners)
 
 
@@ -61,6 +72,7 @@ def start(partner_id):
             ON CONFLICT(patient_id,doctor_id) DO UPDATE SET patient_id=EXCLUDED.patient_id RETURNING id''',(patient,doctor))
         thread_id=c.fetchone()[0]
     conn.commit()
+    if request.accept_mimetypes.best=='application/json':return jsonify(thread_id=thread_id)
     return redirect(url_for('communications.conversation',thread_id=thread_id),code=303)
 
 
@@ -85,6 +97,7 @@ def conversation(thread_id):
             if c.fetchone()[0]>=20: abort(429)
             c.execute('INSERT INTO messages(conversation_id,sender_role,body,attachment_id) VALUES(%s,%s,%s,%s)',(thread_id,role,text,attachment))
             conn.commit()
+            if request.accept_mimetypes.best=='application/json':return jsonify(ok=True)
             return redirect(url_for('communications.conversation',thread_id=thread_id),code=303)
         c.execute('SELECT name FROM "user" WHERE id=%s',(patient,)); patient_name=c.fetchone()[0]
         c.execute('SELECT full_name FROM doctor WHERE id=%s',(doctor,)); doctor_name=c.fetchone()[0]
@@ -131,6 +144,7 @@ def start_call(thread_id):
         # Remove expired transport metadata; conversation history remains.
         c.execute("DELETE FROM call_signals WHERE call_id IN (SELECT id FROM video_calls WHERE expires_at<CURRENT_TIMESTAMP-interval '1 day')")
     conn.commit()
+    if request.accept_mimetypes.best=='application/json':return jsonify(url=url_for('communications.call',call_id=call_id))
     return redirect(url_for('communications.call',call_id=call_id),code=303)
 
 

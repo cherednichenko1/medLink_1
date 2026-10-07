@@ -53,6 +53,8 @@ from communications import bp as communications_blueprint
 app.register_blueprint(communications_blueprint)
 @app.before_request
 def upload_request_limit():
+    if request.endpoint == 'portal.upload_avatar' and request.method == 'POST':
+        request.max_content_length = 3 * 1024 * 1024
     if request.endpoint == 'portal.documents' and request.method == 'POST':
         request.max_content_length = 6 * 1024 * 1024
 app.teardown_appcontext(close_db)
@@ -629,7 +631,7 @@ def livez():
 def healthz():
     try:
         with get_db().cursor() as cursor:
-            cursor.execute('SELECT 1 FROM schema_migrations WHERE version = 4')
+            cursor.execute('SELECT 1 FROM schema_migrations WHERE version = 5')
             if not cursor.fetchone():
                 return {'status': 'unavailable'}, 503
         return {'status': 'ok'}, 200

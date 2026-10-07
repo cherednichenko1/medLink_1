@@ -59,6 +59,7 @@ def init_db():
             migrate_doctor_workflows(cursor)
             migrate_portal(cursor)
             migrate_communications(cursor)
+            migrate_avatars(cursor)
             return
         cursor.execute('''CREATE TABLE IF NOT EXISTS district (
             id SERIAL PRIMARY KEY, name TEXT NOT NULL)''')
@@ -125,6 +126,7 @@ def init_db():
         migrate_doctor_workflows(cursor)
         migrate_portal(cursor)
         migrate_communications(cursor)
+        migrate_avatars(cursor)
     print('MedLink: міграцію БД завершено.')
 
 
@@ -178,6 +180,14 @@ def migrate_communications(cursor):
     cursor.execute("""CREATE TABLE call_signals(id BIGSERIAL PRIMARY KEY,call_id UUID NOT NULL REFERENCES video_calls(id),sender_role TEXT NOT NULL CHECK(sender_role IN ('user','doctor')),kind TEXT NOT NULL CHECK(kind IN ('offer','answer','candidate','hangup')),payload TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
     cursor.execute('CREATE INDEX signals_call_idx ON call_signals(call_id,id)')
     cursor.execute('INSERT INTO schema_migrations(version) VALUES(4)')
+
+
+def migrate_avatars(cursor):
+    cursor.execute('SELECT version FROM schema_migrations WHERE version=5')
+    if cursor.fetchone(): return
+    cursor.execute('ALTER TABLE "user" ADD COLUMN avatar BYTEA')
+    cursor.execute('ALTER TABLE doctor ADD COLUMN avatar BYTEA')
+    cursor.execute('INSERT INTO schema_migrations(version) VALUES(5)')
 
 
 if __name__ == '__main__':

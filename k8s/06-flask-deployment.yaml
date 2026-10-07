@@ -24,7 +24,7 @@ spec:
           # Образ збирається локально і завантажується в Docker-демон minikube
           # (див. DEPLOY.md, крок з `eval $(minikube docker-env)`),
           # тому pull з реєстру не потрібен.
-          image: medlink-app:v1.0.5
+          image: medlink-app:v1.0.6
           imagePullPolicy: Never
           ports:
             - containerPort: 5000

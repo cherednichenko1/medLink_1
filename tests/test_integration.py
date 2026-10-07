@@ -99,6 +99,45 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(session['user_role'], 'user')
             self.assertNotEqual(session['_csrf'], token)
 
+    def test_avatar_owner_upload_and_patient_privacy(self):
+        import io
+        from PIL import Image
+        image=io.BytesIO();Image.new('RGB',(80,120),'red').save(image,format='PNG')
+        token=self.authenticate()
+        response=self.client.post('/profile/avatar',data={'csrf_token':token,'avatar':(io.BytesIO(image.getvalue()),'photo.png'),'user_id':'2'})
+        self.assertEqual(response.status_code,303)
+        avatar=self.client.get('/avatars/user/1')
+        self.assertEqual(avatar.mimetype,'image/jpeg')
+        self.assertEqual(Image.open(io.BytesIO(avatar.data)).size,(256,256))
+        with closing(db.get_db_connection()) as conn,conn.cursor() as c:
+            c.execute('SELECT avatar FROM "user" WHERE id=2');self.assertIsNone(c.fetchone()[0])
+        self.authenticate(account_id=2)
+        self.assertEqual(self.client.get('/avatars/user/1').status_code,403)
+        token=self.authenticate()
+        self.assertEqual(self.client.post('/profile/avatar/delete',data={'csrf_token':token}).status_code,303)
+        with closing(db.get_db_connection()) as conn,conn.cursor() as c:
+            c.execute('SELECT avatar FROM "user" WHERE id=1');self.assertIsNone(c.fetchone()[0])
+
+    def test_avatar_invalid_type_and_csrf(self):
+        import io
+        token=self.authenticate(role='doctor')
+        self.assertEqual(self.client.post('/profile/avatar',data={'csrf_token':token,'avatar':(io.BytesIO(b'<script>bad</script>'),'x.png')}).status_code,400)
+        self.assertEqual(self.client.post('/profile/avatar',data={'avatar':(io.BytesIO(b'fake'),'x.png')}).status_code,400)
+
+    def test_mini_chat_json_matches_full_conversation(self):
+        self.book();token=self.authenticate()
+        headers={'Accept':'application/json'}
+        contacts=self.client.get('/messages/contacts').json['contacts']
+        self.assertEqual([p['id'] for p in contacts],[1])
+        response=self.client.post('/messages/start/1',data={'csrf_token':token},headers=headers)
+        thread=response.json['thread_id'];route=f'/messages/{thread}'
+        self.assertEqual(self.client.post(route,data={'csrf_token':token,'text':'Міні-чат'},headers=headers).json,{'ok':True})
+        self.assertEqual(self.client.get(route+'/updates').json['messages'][0]['text'],'Міні-чат')
+        self.assertTrue(self.client.post(route+'/call',data={'csrf_token':token},headers=headers).json['url'].startswith('/calls/'))
+        self.authenticate(role='doctor',account_id=2)
+        self.assertEqual(self.client.get('/messages/contacts').json['contacts'],[])
+        self.assertEqual(self.client.get(route+'/updates').status_code,403)
+
     def open_chat(self):
         self.book()
         token=self.authenticate()

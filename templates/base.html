@@ -29,10 +29,14 @@
     </div>
   </header>
   {% if session.get('user_id') %}<nav class="workspace-nav" aria-label="Особистий кабінет"><a href="{{ url_for('portal.workspace') }}">Мій кабінет</a><a href="{{ url_for('portal.profile') }}">Мій профіль</a><a href="{{ url_for('communications.inbox') }}">Повідомлення</a>{% if session.get('user_role') == 'user' %}<a href="{{ url_for('portal.documents',patient_id=session.user_id) }}">Мої документи</a>{% endif %}<button type="button" class="button secondary small" data-qr-src="{{ url_for('portal.workspace_qr') }}" data-qr-title="Кабінет на телефоні чи комп’ютері">QR кабінету</button></nav>{% endif %}
-  <main id="content" class="page-shell">
+  <section id="toastStack" class="toast-stack" aria-label="Сповіщення">
     {% for category, message in get_flashed_messages(with_categories=true) %}
-      <div class="notice {{ category }}" role="{{ 'alert' if category == 'error' else 'status' }}"><span>{{ message }}</span><button type="button" data-dismiss-notice aria-label="Закрити повідомлення">×</button></div>
+      <div class="notice toast {{ category }}" data-toast role="{{ 'alert' if category == 'error' else 'status' }}"><span>{{ message }}</span><button type="button" data-dismiss-notice aria-label="Закрити повідомлення">×</button></div>
     {% endfor %}
+{% if error %}<div class="notice toast error" role="alert" data-toast>{{ error }}<button type="button" data-dismiss-notice aria-label="Закрити повідомлення">×</button></div>{% endif %}
+{% if code and message %}<div class="notice toast error" role="alert" data-toast>{{ message }}<button type="button" data-dismiss-notice aria-label="Закрити повідомлення">×</button></div>{% endif %}
+  </section>
+  <main id="content" class="page-shell">
     {% block body %}{% endblock %}
   </main>
   <footer class="site-footer"><a class="brand" href="{{ url_for('main') }}">Med<span>Link</span></a><span>Ваше здоров’я. Ваш час. Ваша турбота.</span><span>© {{ 'now'|strftime('%Y') }} MedLink</span></footer>
@@ -47,5 +51,16 @@
     <button type="button" class="button secondary" data-close-qr>Готово</button>
     <input id="qrCsrf" type="hidden" value="{{ csrf_token() }}">
   </dialog>
+<script src="{{ url_for('static',filename='notifications.js') }}" defer></script>
+{% if session.get('user_id') %}
+<button id="miniChatToggle" class="button chat-launcher" type="button" aria-controls="miniChat" aria-expanded="false">Повідомлення</button>
+<section id="miniChat" class="mini-chat" hidden aria-label="Переписка" data-role="{{ session.user_role }}" data-csrf="{{ csrf_token() }}">
+<header><strong>Переписка</strong><button id="miniChatClose" type="button" class="icon-button" aria-label="Закрити переписку">×</button></header>
+<label class="chat-contact">Співрозмовник<select id="miniChatContact"><option value="">Оберіть контакт</option></select></label>
+<div id="miniChatMessages" class="mini-chat-messages" aria-label="Повідомлення"></div><p id="miniChatStatus" role="status"></p>
+<form id="miniChatForm"><label class="sr-only" for="miniChatText">Повідомлення</label><textarea id="miniChatText" maxlength="4000" rows="2" placeholder="Ваше повідомлення…" required></textarea><button class="button small" type="submit">Надіслати</button></form>
+<footer><a id="miniChatFull" href="{{ url_for('communications.inbox') }}">Окрема сторінка</a><a id="miniChatFiles" hidden>Фото / PDF</a><button id="miniChatCall" type="button" class="button small secondary" disabled>Відео</button></footer>
+</section><script src="{{ url_for('static',filename='mini-chat.js') }}" defer></script>
+{% endif %}
 </body>
 </html>
