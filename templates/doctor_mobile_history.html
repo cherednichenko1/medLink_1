@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block body %}
 {% include 'doctor_nav.html' %}
-<h1>Історія хвороби: {{ patient_name }}</h1>
+<a class="button secondary" href="{{ url_for('portal.documents',patient_id=patient_id) }}">Фото та документи пацієнта</a><h1>Історія хвороби: {{ patient_name }}</h1>
 <section class="panel"><h2>Новий медичний запис</h2>
 <form method="post" class="account-form">
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

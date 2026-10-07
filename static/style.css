@@ -12,3 +12,7 @@
 .page-shell:has(>.account-form)>h2{text-align:center;font-size:2rem}.data-table td{overflow-wrap:anywhere}.patient-history td{max-width:400px}
 
 .doctor-nav,.login-tabs{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:28px}.doctor-nav a,.login-tabs a{background:#edf5f8;padding:12px 18px;border-radius:12px;font-size:13px;font-weight:650}.login-tabs{justify-content:center}.schedule-grid{display:grid;gap:16px;margin-bottom:24px}.schedule-row{display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:16px;align-items:center}.schedule-row>label:not(.checkbox-label){display:grid;gap:8px;font-size:12px}@media(max-width:680px){.schedule-row{grid-template-columns:1fr 1fr}.schedule-row>.checkbox-label{grid-column:1/-1}}
+
+.workspace-nav {display:flex;flex-wrap:wrap;gap:12px;align-items:center;max-width:1160px;margin:16px auto;padding:0 20px;} .document-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:16px;} .document-grid form{margin-top:12px;} .document-grid h2,.document-grid p{overflow-wrap:anywhere;} input[type=file]{max-width:100%;} @media(max-width:600px){.workspace-nav{gap:8px;padding:0 16px;}.workspace-nav a{padding:8px;} .account-form button{width:100%;}}
+
+.document-preview{width:100%;height:180px;object-fit:contain;border-radius:12px;background:#f2f7fa;}

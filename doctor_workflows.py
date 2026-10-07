@@ -127,4 +127,4 @@ def mobile_history(patient_id):
         cursor.execute("""SELECT diagnosis,recommendations,medication,timestamp FROM patient_history
             WHERE patient_id = %s AND doctor_id = %s ORDER BY timestamp DESC""", (patient_id,session['user_id']))
         history = cursor.fetchall()
-    return render_template('doctor_mobile_history.html', patient_name=row[0], history=history)
+    return render_template('doctor_mobile_history.html', patient_name=row[0], history=history, patient_id=patient_id)

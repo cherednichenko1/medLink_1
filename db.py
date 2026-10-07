@@ -57,6 +57,7 @@ def init_db():
         cursor.execute('SELECT version FROM schema_migrations WHERE version = 1')
         if cursor.fetchone():
             migrate_doctor_workflows(cursor)
+            migrate_portal(cursor)
             return
         cursor.execute('''CREATE TABLE IF NOT EXISTS district (
             id SERIAL PRIMARY KEY, name TEXT NOT NULL)''')
@@ -121,6 +122,7 @@ def init_db():
             cursor.execute("INSERT INTO specialization (name) VALUES ('Терапевт')")
         cursor.execute('INSERT INTO schema_migrations (version) VALUES (1)')
         migrate_doctor_workflows(cursor)
+        migrate_portal(cursor)
     print('MedLink: міграцію БД завершено.')
 
 
@@ -149,3 +151,17 @@ def migrate_doctor_workflows(cursor):
 
 if __name__ == '__main__':
     init_db()
+
+
+def migrate_portal(cursor):
+    cursor.execute('SELECT version FROM schema_migrations WHERE version = 3')
+    if cursor.fetchone(): return
+    cursor.execute("""CREATE TABLE patient_documents (
+        id SERIAL PRIMARY KEY, patient_id INTEGER NOT NULL REFERENCES "user"(id),
+        uploader_role TEXT NOT NULL CHECK(uploader_role IN ('user','doctor')), uploader_id INTEGER NOT NULL,
+        title TEXT NOT NULL, filename TEXT NOT NULL, mime_type TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL CHECK(size_bytes > 0 AND size_bytes <= 5242880),
+        content BYTEA, created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP, deleted_at TIMESTAMPTZ,
+        CHECK((content IS NULL) = (deleted_at IS NOT NULL)))""")
+    cursor.execute('CREATE INDEX documents_patient_idx ON patient_documents(patient_id,created_at DESC) WHERE content IS NOT NULL')
+    cursor.execute('INSERT INTO schema_migrations(version) VALUES(3)')

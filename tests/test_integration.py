@@ -42,7 +42,7 @@ class DatabaseTests(unittest.TestCase):
 
     def setUp(self):
         with closing(db.get_db_connection()) as conn, conn, conn.cursor() as cursor:
-            cursor.execute('TRUNCATE appointments, patient_history, doctor, "user", login_attempts RESTART IDENTITY CASCADE')
+            cursor.execute('TRUNCATE patient_documents, appointments, patient_history, doctor, "user", login_attempts RESTART IDENTITY CASCADE')
             cursor.execute('''INSERT INTO "user" (name,email,phone,password) VALUES
                 ('Пацієнт','patient@example.com','+380991234567',%s),
                 ('Інший','other@example.com','+380991234568',%s)''', (self.password_hash, self.password_hash))
@@ -98,6 +98,76 @@ class DatabaseTests(unittest.TestCase):
         with self.client.session_transaction() as session:
             self.assertEqual(session['user_role'], 'user')
             self.assertNotEqual(session['_csrf'], token)
+
+    def test_workspace_qr_and_roles(self):
+        self.assertEqual(self.client.get('/workspace').status_code,302)
+        self.assertEqual(self.client.get('/workspace/qr').mimetype,'image/svg+xml')
+        self.authenticate()
+        self.assertTrue(self.client.get('/workspace').location.endswith('/userCabinet'))
+        self.authenticate(role='doctor')
+        self.assertTrue(self.client.get('/workspace').location.endswith('/doctorCabinet'))
+
+    def test_profile_updates_only_current_account(self):
+        token=self.authenticate()
+        response=self.client.post('/profile',data={'csrf_token':token,'name':'Нове ім’я','phone':'+380991234500','user_id':'2'})
+        self.assertEqual(response.status_code,303)
+        with closing(db.get_db_connection()) as conn,conn.cursor() as cursor:
+            cursor.execute('SELECT name FROM "user" ORDER BY id')
+            self.assertEqual(cursor.fetchall(),[('Нове ім’я',),('Інший',)])
+
+    def test_reschedule_rollback_and_ownership(self):
+        self.book()
+        with closing(db.get_db_connection()) as conn,conn,conn.cursor() as cursor:
+            cursor.execute('SELECT id FROM appointments'); appointment=cursor.fetchone()[0]
+            cursor.execute("INSERT INTO appointments(doctor_id,user_id,appointment_date,appointment_time) VALUES(1,2,%s,'10:00')",(self.day,))
+        token=self.authenticate()
+        route=f'/appointments/{appointment}/reschedule'
+        self.assertEqual(self.client.post(route,data={'csrf_token':token,'date':self.day,'time':'10:00'}).status_code,409)
+        with closing(db.get_db_connection()) as conn,conn.cursor() as cursor:
+            cursor.execute('SELECT appointment_time FROM appointments WHERE id=%s',(appointment,))
+            self.assertEqual(str(cursor.fetchone()[0]),'09:00:00')
+        self.assertEqual(self.client.post(route,data={'csrf_token':token,'date':self.day,'time':'11:00'}).status_code,303)
+        self.authenticate(account_id=2)
+        self.assertEqual(self.client.get(route).status_code,404)
+
+    def test_documents_upload_download_permissions_and_deletion(self):
+        import io
+        from PIL import Image
+        image=io.BytesIO(); Image.frombytes('RGB',(256,256),os.urandom(256*256*3)).save(image,format='PNG'); content=image.getvalue()
+        self.book()
+        token=self.authenticate()
+        route='/patients/1/documents'
+        self.assertEqual(self.client.post(route,data={'csrf_token':token,'title':'Аналізи','file':(io.BytesIO(content),'photo.png')}).status_code,303)
+        with closing(db.get_db_connection()) as conn,conn.cursor() as cursor:
+            cursor.execute('SELECT id FROM patient_documents'); document=cursor.fetchone()[0]
+        download=f'/documents/{document}/download'
+        response=self.client.get(download)
+        self.assertEqual(response.data,content)
+        self.assertIn('attachment',response.headers['Content-Disposition'])
+        self.assertGreater(len(content),64*1024)
+        preview=self.client.get(f'/documents/{document}/preview')
+        self.assertEqual(preview.mimetype,'image/jpeg')
+        self.assertEqual(preview.headers['Cache-Control'],'no-store')
+        self.authenticate(role='doctor')
+        self.assertEqual(self.client.get(download).status_code,200)
+        self.authenticate(role='doctor',account_id=2)
+        self.assertEqual(self.client.get(download).status_code,403)
+        self.authenticate(account_id=2)
+        self.assertEqual(self.client.get(download).status_code,403)
+        token=self.authenticate()
+        self.assertEqual(self.client.post(f'/documents/{document}/delete',data={'csrf_token':token}).status_code,303)
+        self.assertEqual(self.client.get(download).status_code,404)
+        with closing(db.get_db_connection()) as conn,conn.cursor() as cursor:
+            cursor.execute('SELECT content,deleted_at FROM patient_documents WHERE id=%s',(document,))
+            data=cursor.fetchone(); self.assertIsNone(data[0]); self.assertIsNotNone(data[1])
+
+    def test_document_rejects_spoofed_type_and_guest(self):
+        import io
+        token=self.csrf()
+        self.assertEqual(self.client.post('/patients/1/documents',data={'csrf_token':token,'file':(io.BytesIO(b'fake'),'x.png')}).status_code,302)
+        token=self.authenticate()
+        self.assertEqual(self.client.post('/patients/1/documents',data={'csrf_token':token,'file':(io.BytesIO(b'<script>alert(1)</script>'),'x.png')}).status_code,400)
+        self.assertEqual(self.client.post('/patients/1/documents',data={'file':(io.BytesIO(b'fake'),'x.png')}).status_code,400)
 
     def test_public_doctor_registration_and_login(self):
         token = self.csrf()

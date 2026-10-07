@@ -47,6 +47,12 @@ if os.environ.get('TRUST_PROXY', 'false').lower() == 'true':
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=0)
 from doctor_workflows import bp as doctor_blueprint
 app.register_blueprint(doctor_blueprint)
+from portal import bp as portal_blueprint
+app.register_blueprint(portal_blueprint)
+@app.before_request
+def upload_request_limit():
+    if request.endpoint == 'portal.documents' and request.method == 'POST':
+        request.max_content_length = 6 * 1024 * 1024
 app.teardown_appcontext(close_db)
 app.before_request(protect_csrf)
 app.jinja_env.globals['csrf_token'] = csrf_token
@@ -458,7 +464,9 @@ def patient_history(patient_id):
 def safe_next(value):
     # Only known private read pages; no open redirects or protocol-relative URLs.
     import re
-    if re.fullmatch(r'/(?:user_info/[1-9][0-9]*|patient_history/[1-9][0-9]*|doctor/patients/[1-9][0-9]*/history)', value or ''):
+    if value in {'/workspace','/profile'}:
+        return value
+    if re.fullmatch(r'/(?:patients/[1-9][0-9]*/documents|user_info/[1-9][0-9]*|patient_history/[1-9][0-9]*|doctor/patients/[1-9][0-9]*/history)', value or ''):
         return value
     return ''
 
@@ -619,7 +627,7 @@ def livez():
 def healthz():
     try:
         with get_db().cursor() as cursor:
-            cursor.execute('SELECT 1 FROM schema_migrations WHERE version = 2')
+            cursor.execute('SELECT 1 FROM schema_migrations WHERE version = 3')
             if not cursor.fetchone():
                 return {'status': 'unavailable'}, 503
         return {'status': 'ok'}, 200
